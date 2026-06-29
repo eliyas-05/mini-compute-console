@@ -37,6 +37,8 @@ header {
   z-index: 100;
 }
 
+.header-left { display: flex; flex-direction: column; gap: 1px; }
+
 .logo {
   font-size: 18px;
   font-weight: 700;
@@ -87,18 +89,55 @@ header {
   color: var(--primary);
 }
 
+/* ── Metrics bar ── */
+.metrics-bar {
+  display: flex;
+  gap: 0;
+  background: var(--card);
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  padding: 0 24px;
+}
+.metric {
+  flex: 1;
+  padding: 14px 16px;
+  border-right: 1px solid rgba(255,255,255,0.05);
+  min-width: 0;
+}
+.metric:last-child { border-right: none; }
+.metric-value {
+  font-size: 20px;
+  font-weight: 800;
+  font-family: monospace;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.metric-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
 /* ── Layout ── */
 main {
-  max-width: 1280px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 24px;
   display: grid;
-  grid-template-columns: 1fr 420px;
+  grid-template-columns: 1fr 400px;
   gap: 24px;
 }
 
-@media (max-width: 900px) {
+.left-col { min-width: 0; }
+
+@media (max-width: 960px) {
   main { grid-template-columns: 1fr; }
+  .metrics-bar { flex-wrap: wrap; }
+  .metric { flex: 1 1 33%; }
 }
 
 /* ── Section titles ── */
@@ -148,6 +187,8 @@ main {
 }
 .btn-accent:hover { opacity: 0.85; }
 .btn-sm { font-size: 12px; padding: 5px 12px; }
+.btn-danger { background: rgba(255,107,107,0.15); color: var(--danger); border: 1px solid rgba(255,107,107,0.3); }
+.btn-danger:hover { background: rgba(255,107,107,0.25); }
 
 /* ── Provider table ── */
 .provider-table {
@@ -236,7 +277,8 @@ main {
 .badge-queued  { background: rgba(255,255,255,0.1); color: var(--muted); }
 .badge-running { background: rgba(0,206,201,0.15); color: var(--accent); }
 .badge-complete { background: rgba(85,239,196,0.15); color: var(--success); }
-.badge-error { background: rgba(255,107,107,0.15); color: var(--danger); }
+.badge-error     { background: rgba(255,107,107,0.15); color: var(--danger); }
+.badge-cancelled { background: rgba(255,107,107,0.1);  color: var(--danger); }
 
 .job-provider { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
 .job-detail { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
@@ -288,6 +330,23 @@ main {
 .log-box .log-line:first-child { color: var(--muted); }
 .log-empty { color: var(--muted); font-style: italic; }
 
+/* ── WS badge ── */
+.ws-badge {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  margin-left: 8px;
+  animation: pulse 2s infinite;
+}
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+/* ── Misc helpers ── */
+.muted-text { color: var(--muted); font-size: 12px; }
+.mono { font-family: monospace; font-size: 12px; }
+.table-empty { padding: 20px; color: var(--muted); text-align: center; }
+.badge-admin { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; background: rgba(108,92,231,0.2); color: var(--primary); border-radius: 4px; padding: 2px 6px; margin-left: 6px; text-transform: uppercase; }
+
 /* ── Audit card ── */
 .audit-list { display: flex; flex-direction: column; gap: 8px; }
 .audit-item {
@@ -304,6 +363,9 @@ main {
 .audit-detail { color: var(--muted); font-size: 11px; }
 .audit-user { color: var(--primary); }
 .audit-empty { color: var(--muted); font-size: 12px; font-style: italic; }
+.audit-action { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; border-radius: 4px; padding: 1px 5px; text-transform: uppercase; }
+.audit-action-launch { background: rgba(0,206,201,0.15); color: var(--accent); }
+.audit-action-cancel { background: rgba(255,107,107,0.15); color: var(--danger); }
 
 /* ── Toast ── */
 #toast {

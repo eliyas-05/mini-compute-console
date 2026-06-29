@@ -6,12 +6,12 @@
   <title>VoltGrid</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 </head>
 <body>
 
 <header>
-  <div>
+  <div class="header-left">
     <div class="logo" id="logo-text">⚡ VoltGrid</div>
     <div class="tagline" id="tagline-text">On-demand GPU power for AI workloads</div>
   </div>
@@ -20,32 +20,57 @@
       <button class="brand-btn active" data-brand="voltgrid">VoltGrid</button>
       <button class="brand-btn" data-brand="partnera">PartnerA</button>
     </div>
-    <input
-      id="api-key-input"
-      class="api-key-input"
-      type="text"
-      placeholder="X-API-Key"
-      spellcheck="false"
-    />
+    <input id="api-key-input" class="api-key-input" type="text" placeholder="X-API-Key" spellcheck="false" />
   </div>
 </header>
 
+<!-- Dashboard metrics bar -->
+<div class="metrics-bar" id="metrics-bar">
+  <div class="metric">
+    <div class="metric-value" id="m-total-jobs">—</div>
+    <div class="metric-label">Total Jobs</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value" id="m-running">—</div>
+    <div class="metric-label">Running</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value" id="m-completed">—</div>
+    <div class="metric-label">Completed</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value" id="m-spend" style="color:var(--accent)">—</div>
+    <div class="metric-label">Total Spend</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value" id="m-avg-cost">—</div>
+    <div class="metric-label">Avg Cost / Job</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value" id="m-top-provider">—</div>
+    <div class="metric-label">Top Provider</div>
+  </div>
+</div>
+
 <main>
-  <!-- Left: provider list -->
-  <section>
+  <!-- Left column -->
+  <div class="left-col">
+    <!-- Auto-pick -->
     <div class="autopick-bar">
       <div class="autopick-desc">
-        <strong>Smart routing</strong> — auto-selects the cheapest provider with ≥98% uptime
+        <strong>Smart routing</strong> — auto-selects cheapest provider with ≥98% uptime
       </div>
-      <button class="btn btn-accent" id="auto-pick-btn">⚡ Auto Pick Cheapest</button>
+      <button class="btn btn-accent" id="auto-pick-btn">⚡ Auto Pick &amp; Launch</button>
     </div>
 
-    <div class="section-title">Available GPU Providers</div>
+    <!-- Provider table -->
+    <div class="section-title">GPU Providers</div>
     <table class="provider-table">
       <thead>
         <tr>
           <th>Provider</th>
           <th>GPU</th>
+          <th>Region</th>
           <th>Price</th>
           <th>Uptime</th>
           <th>Status</th>
@@ -53,22 +78,45 @@
         </tr>
       </thead>
       <tbody id="provider-tbody">
-        <tr><td colspan="6" style="padding:24px;color:var(--muted);text-align:center">Loading providers…</td></tr>
+        <tr><td colspan="7" class="table-empty">Loading providers…</td></tr>
       </tbody>
     </table>
-  </section>
 
-  <!-- Right: status + audit -->
+    <!-- Job history -->
+    <div class="section-title" style="margin-top:28px">Job History</div>
+    <table class="provider-table">
+      <thead>
+        <tr>
+          <th>Job ID</th>
+          <th>Provider</th>
+          <th>GPU</th>
+          <th>Status</th>
+          <th>Cost</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="history-tbody">
+        <tr><td colspan="6" class="table-empty">No jobs yet.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Right column -->
   <aside class="right-panel">
+    <!-- Active job card -->
     <div>
       <div class="section-title">Active Job</div>
       <div class="card" id="job-panel">
-        <div class="no-job">No active job. Launch one from the provider list.</div>
+        <div class="no-job">No active job.<br>Launch one from the provider list.</div>
       </div>
     </div>
 
-    <div id="audit-card" class="card">
-      <div class="section-title">Audit Log <span style="color:var(--muted);font-size:10px;text-transform:none">(admin key only)</span></div>
+    <!-- Audit log -->
+    <div id="audit-card" class="card" style="display:none">
+      <div class="section-title">
+        Audit Log
+        <span class="badge-admin">admin</span>
+      </div>
       <div class="audit-list" id="audit-list">
         <span class="audit-empty">No activity yet.</span>
       </div>

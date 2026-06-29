@@ -1,40 +1,34 @@
 const API_BASE = "http://localhost:8000";
+const WS_BASE  = "ws://localhost:8000";
 const JOB_DURATION_SECONDS = 90;
 
 let currentJobId = null;
-let pollInterval = null;
+let activeSocket  = null;
 let apiKey = "demo-key-123";
 
-// ── Brand ────────────────────────────────────────────────────────────────────
+// ── Brand ─────────────────────────────────────────────────────────────────────
 
 async function loadBrand(brandName) {
   try {
     const res = await fetch(`${API_BASE}/brand/${brandName}`);
     if (!res.ok) return;
-    const brand = await res.json();
-
-    document.documentElement.style.setProperty("--primary", brand.primary_color);
-    document.documentElement.style.setProperty("--accent", brand.accent_color);
-    document.documentElement.style.setProperty("--bg", brand.bg_color);
-    document.documentElement.style.setProperty("--card", brand.card_color);
-    document.documentElement.style.setProperty("--text", brand.text_color);
-    document.documentElement.style.setProperty("--muted", brand.muted_color);
-
-    document.getElementById("logo-text").textContent = brand.logo_text;
-    document.getElementById("tagline-text").textContent = brand.tagline;
-    document.title = brand.display_name;
-
-    document.querySelectorAll(".brand-btn").forEach(btn => {
-      btn.classList.toggle("active", btn.dataset.brand === brandName);
-    });
-
-    // Update URL without reload
+    const b = await res.json();
+    const r = document.documentElement.style;
+    r.setProperty("--primary", b.primary_color);
+    r.setProperty("--accent",  b.accent_color);
+    r.setProperty("--bg",      b.bg_color);
+    r.setProperty("--card",    b.card_color);
+    r.setProperty("--text",    b.text_color);
+    r.setProperty("--muted",   b.muted_color);
+    document.getElementById("logo-text").textContent   = b.logo_text;
+    document.getElementById("tagline-text").textContent = b.tagline;
+    document.title = b.display_name;
+    document.querySelectorAll(".brand-btn").forEach(btn =>
+      btn.classList.toggle("active", btn.dataset.brand === brandName));
     const url = new URL(window.location);
     url.searchParams.set("brand", brandName);
     window.history.replaceState({}, "", url);
-  } catch (e) {
-    console.error("Brand load failed:", e);
-  }
+  } catch (e) { console.error("Brand load failed:", e); }
 }
 
 // ── API helpers ───────────────────────────────────────────────────────────────
@@ -43,11 +37,7 @@ async function apiFetch(path, options = {}) {
   const key = document.getElementById("api-key-input").value.trim() || apiKey;
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
-    headers: {
-      "X-API-Key": key,
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
+    headers: { "X-API-Key": key, "Content-Type": "application/json", ...(options.headers || {}) },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -62,37 +52,30 @@ async function loadProviders() {
   try {
     const providers = await apiFetch("/providers");
     renderProviders(providers);
-  } catch (e) {
-    showToast(`Failed to load providers: ${e.message}`, "error");
-  }
+  } catch (e) { showToast(`Failed to load providers: ${e.message}`, "error"); }
 }
 
 function renderProviders(providers) {
   const tbody = document.getElementById("provider-tbody");
   tbody.innerHTML = "";
-
   providers.forEach(p => {
     const uptimeClass = p.uptime_pct >= 99 ? "uptime-high" : p.uptime_pct >= 98 ? "uptime-med" : "uptime-low";
-    const dotClass = p.status === "available" ? "dot-available" : "dot-busy";
-    const available = p.status === "available";
-
+    const dotClass    = p.status === "available" ? "dot-available" : "dot-busy";
+    const available   = p.status === "available";
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>
         <div class="provider-name">${p.name}</div>
-        <div class="provider-region">${p.region}</div>
       </td>
       <td><span class="gpu-badge">${p.gpu_type}</span></td>
+      <td class="muted-text">${p.region}</td>
       <td class="price">$${p.price_per_hour.toFixed(2)}<span class="price-unit">/hr</span></td>
       <td class="uptime ${uptimeClass}">${p.uptime_pct}%</td>
       <td><span class="status-dot ${dotClass}"></span>${p.status}</td>
       <td>
         <button class="btn btn-primary btn-sm" ${available ? "" : "disabled"}
-          onclick="launchJob('${p.id}')">
-          Launch
-        </button>
-      </td>
-    `;
+          onclick="launchJob('${p.id}')">Launch</button>
+      </td>`;
     tbody.appendChild(tr);
   });
 }
@@ -102,177 +85,260 @@ function renderProviders(providers) {
 async function launchJob(providerId) {
   const body = providerId ? { provider_id: providerId } : {};
   try {
-    const job = await apiFetch("/jobs", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    const job = await apiFetch("/jobs", { method: "POST", body: JSON.stringify(body) });
     currentJobId = job.job_id;
-    showToast(`Job ${job.job_id} launched on ${job.provider_name} (${job.gpu_type})`, "success");
-    startPolling();
-    renderJobCard(job);
+    showToast(`Job ${job.job_id} launched on ${job.provider_name}`, "success");
+    renderJobCard(job, []);
+    openWebSocket(job.job_id);
+    refreshHistory();
+    refreshAnalytics();
     refreshAuditLog();
-  } catch (e) {
-    showToast(`Launch failed: ${e.message}`, "error");
-  }
+  } catch (e) { showToast(`Launch failed: ${e.message}`, "error"); }
 }
 
-// ── Polling ───────────────────────────────────────────────────────────────────
+// ── Cancel ────────────────────────────────────────────────────────────────────
 
-function startPolling() {
-  if (pollInterval) clearInterval(pollInterval);
-  pollInterval = setInterval(pollJob, 2000);
-}
-
-async function pollJob() {
-  if (!currentJobId) return;
+async function cancelJob(jobId) {
   try {
-    const [job, logsData] = await Promise.all([
-      apiFetch(`/jobs/${currentJobId}`),
-      apiFetch(`/jobs/${currentJobId}/logs`),
-    ]);
-    renderJobCard(job, logsData.logs);
-    if (job.status === "complete") {
-      clearInterval(pollInterval);
-      refreshAuditLog();
-    }
-  } catch (e) {
-    console.error("Poll error:", e);
-  }
+    const job = await apiFetch(`/jobs/${jobId}`, { method: "DELETE" });
+    showToast(`Job ${jobId} cancelled`, "");
+    renderJobCard(job, job._logs || []);
+    if (activeSocket) { activeSocket.close(); activeSocket = null; }
+    refreshHistory();
+    refreshAnalytics();
+  } catch (e) { showToast(`Cancel failed: ${e.message}`, "error"); }
 }
 
-// ── Render job card ───────────────────────────────────────────────────────────
+// ── WebSocket log stream ──────────────────────────────────────────────────────
 
-function renderJobCard(job, logs = []) {
+function openWebSocket(jobId) {
+  if (activeSocket) { activeSocket.close(); activeSocket = null; }
+
+  const ws = new WebSocket(`${WS_BASE}/ws/jobs/${jobId}/logs`);
+  activeSocket = ws;
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+
+    if (msg.line) {
+      appendLogLine(msg.line);
+    }
+
+    if (msg.status) {
+      // job finished — refresh card and stats
+      apiFetch(`/jobs/${jobId}`).then(job => {
+        renderJobCard(job, null);
+        refreshHistory();
+        refreshAnalytics();
+      });
+    }
+
+    if (msg.error) {
+      showToast(`Stream error: ${msg.error}`, "error");
+      ws.close();
+    }
+  };
+
+  ws.onerror = () => showToast("WebSocket connection lost", "error");
+}
+
+function appendLogLine(line) {
+  const box = document.getElementById("log-box");
+  if (!box) return;
+  const empty = box.querySelector(".log-empty");
+  if (empty) empty.remove();
+  const div = document.createElement("div");
+  div.className = "log-line";
+  div.textContent = line;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+// ── Job card ──────────────────────────────────────────────────────────────────
+
+function renderJobCard(job, logs) {
   const panel = document.getElementById("job-panel");
-  const elapsed = estimateElapsed(job);
+  const elapsed = job.cost_so_far / job.price_per_hour * 3600;
   const progress = Math.min((elapsed / JOB_DURATION_SECONDS) * 100, 100);
-
-  const badgeClass = {
-    queued: "badge-queued",
-    running: "badge-running",
-    complete: "badge-complete",
-  }[job.status] || "badge-queued";
+  const badgeClass = { queued: "badge-queued", running: "badge-running", complete: "badge-complete", cancelled: "badge-cancelled" }[job.status] || "badge-queued";
+  const cancelBtn = (job.status === "queued" || job.status === "running")
+    ? `<button class="btn btn-danger btn-sm" onclick="cancelJob('${job.job_id}')">✕ Cancel</button>`
+    : "";
 
   panel.innerHTML = `
     <div class="job-header">
       <div>
         <div class="job-id">JOB-${job.job_id.toUpperCase()}</div>
-        <div class="job-provider">${job.provider_name} · ${job.gpu_type}</div>
-        <div class="job-detail">${job.region} · $${job.price_per_hour.toFixed(2)}/hr</div>
+        <div class="job-provider">${job.provider_name}</div>
+        <div class="job-detail">${job.gpu_type} · ${job.region} · $${job.price_per_hour.toFixed(2)}/hr</div>
       </div>
-      <span class="job-status-badge ${badgeClass}">${job.status}</span>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+        <span class="job-status-badge ${badgeClass}">${job.status}</span>
+        ${cancelBtn}
+      </div>
     </div>
 
     <div class="cost-display">
       <div>
         <div class="cost-label">Running Cost</div>
-        <div class="cost-value">$${job.cost_so_far.toFixed(4)}</div>
+        <div class="cost-value" id="cost-ticker">$${job.cost_so_far.toFixed(4)}</div>
       </div>
       <div class="cost-rate">$${job.price_per_hour.toFixed(2)}/hr</div>
     </div>
 
     <div class="progress-bar-wrap">
-      <div class="progress-bar-fill" style="width: ${progress}%"></div>
+      <div class="progress-bar-fill" style="width:${progress}%"></div>
     </div>
 
-    <div class="section-title" style="margin-top:16px">Live Logs</div>
+    <div class="section-title" style="margin-top:16px">
+      Live Logs
+      <span class="ws-badge" id="ws-badge">● WS</span>
+    </div>
     <div class="log-box" id="log-box">
-      ${logs.length === 0
-        ? '<span class="log-empty">Waiting for logs...</span>'
-        : logs.map(l => `<div class="log-line">${escapeHtml(l)}</div>`).join("")
+      ${logs === null
+        ? ""
+        : logs.length === 0
+          ? '<span class="log-empty">Waiting for logs…</span>'
+          : logs.map(l => `<div class="log-line">${escapeHtml(l)}</div>`).join("")
       }
-    </div>
-  `;
+    </div>`;
 
-  // Auto-scroll logs
-  const logBox = document.getElementById("log-box");
-  if (logBox) logBox.scrollTop = logBox.scrollHeight;
+  // Tick the cost display locally while running
+  if (job.status === "running") {
+    startCostTicker(job.price_per_hour, job.cost_so_far);
+  }
 }
 
-function estimateElapsed(job) {
-  // cost_so_far = elapsed_hours * price_per_hour
-  if (job.price_per_hour === 0) return 0;
-  return (job.cost_so_far / job.price_per_hour) * 3600;
+let _tickerInterval = null;
+function startCostTicker(pricePerHour, startCost) {
+  if (_tickerInterval) clearInterval(_tickerInterval);
+  const startTime = Date.now();
+  _tickerInterval = setInterval(() => {
+    const el = document.getElementById("cost-ticker");
+    if (!el) { clearInterval(_tickerInterval); return; }
+    const secondsElapsed = (Date.now() - startTime) / 1000;
+    const cost = startCost + (secondsElapsed / 3600) * pricePerHour;
+    el.textContent = `$${cost.toFixed(4)}`;
+  }, 500);
+}
+
+// ── Job history ───────────────────────────────────────────────────────────────
+
+async function refreshHistory() {
+  try {
+    const jobs = await apiFetch("/jobs");
+    renderHistory(jobs);
+  } catch (e) { /* silent */ }
+}
+
+function renderHistory(jobs) {
+  const tbody = document.getElementById("history-tbody");
+  if (!jobs.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No jobs yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = [...jobs].reverse().map(j => {
+    const badgeClass = { queued: "badge-queued", running: "badge-running", complete: "badge-complete", cancelled: "badge-cancelled" }[j.status] || "badge-queued";
+    const cancelBtn = (j.status === "queued" || j.status === "running")
+      ? `<button class="btn btn-danger btn-sm" onclick="cancelJob('${j.job_id}')">✕</button>`
+      : "—";
+    return `<tr>
+      <td><span class="mono">${j.job_id}</span></td>
+      <td>${j.provider_name}</td>
+      <td><span class="gpu-badge">${j.gpu_type}</span></td>
+      <td><span class="job-status-badge ${badgeClass}">${j.status}</span></td>
+      <td class="price">$${j.cost_so_far.toFixed(4)}</td>
+      <td>${cancelBtn}</td>
+    </tr>`;
+  }).join("");
+}
+
+// ── Analytics ─────────────────────────────────────────────────────────────────
+
+async function refreshAnalytics() {
+  try {
+    const a = await apiFetch("/analytics");
+    document.getElementById("m-total-jobs").textContent  = a.total_jobs;
+    document.getElementById("m-running").textContent     = a.running_jobs;
+    document.getElementById("m-completed").textContent   = a.completed_jobs;
+    document.getElementById("m-spend").textContent       = `$${a.total_spend.toFixed(4)}`;
+    document.getElementById("m-avg-cost").textContent    = `$${a.avg_cost_per_job.toFixed(4)}`;
+    document.getElementById("m-top-provider").textContent =
+      a.most_used_provider ? a.most_used_provider.split("·")[0].trim() : "—";
+  } catch (e) { /* silent */ }
 }
 
 // ── Audit log ─────────────────────────────────────────────────────────────────
 
 async function refreshAuditLog() {
-  const adminKey = document.getElementById("api-key-input").value.trim();
-  if (adminKey !== "admin-key-456") return; // only show for admin key
-
-  try {
-    const entries = await apiFetch("/admin/audit");
-    renderAuditLog(entries);
-    document.getElementById("audit-card").style.display = "";
-  } catch {
+  const key = document.getElementById("api-key-input").value.trim() || apiKey;
+  if (key !== "admin-key-456") {
     document.getElementById("audit-card").style.display = "none";
-  }
-}
-
-function renderAuditLog(entries) {
-  const list = document.getElementById("audit-list");
-  if (!entries.length) {
-    list.innerHTML = '<span class="audit-empty">No activity yet.</span>';
     return;
   }
-  list.innerHTML = entries.slice(0, 8).map(e => `
-    <div class="audit-item">
-      <div class="audit-item-top">
-        <span class="audit-job-id">${e.job_id}</span>
-        <span class="audit-ts">${new Date(e.timestamp).toLocaleTimeString()}</span>
-      </div>
-      <div class="audit-detail">
-        <span class="audit-user">${e.user}</span> → ${e.provider_id}
-      </div>
-    </div>
-  `).join("");
+  try {
+    const entries = await apiFetch("/admin/audit");
+    const card = document.getElementById("audit-card");
+    card.style.display = "";
+    const list = document.getElementById("audit-list");
+    if (!entries.length) {
+      list.innerHTML = '<span class="audit-empty">No activity yet.</span>';
+      return;
+    }
+    list.innerHTML = entries.slice(0, 10).map(e => `
+      <div class="audit-item">
+        <div class="audit-item-top">
+          <span class="audit-job-id">${e.job_id}</span>
+          <span class="audit-action audit-action-${e.action}">${e.action}</span>
+          <span class="audit-ts">${new Date(e.timestamp).toLocaleTimeString()}</span>
+        </div>
+        <div class="audit-detail">
+          <span class="audit-user">${e.user}</span> → ${e.provider_id}
+        </div>
+      </div>`).join("");
+  } catch { document.getElementById("audit-card").style.display = "none"; }
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 
-let toastTimer = null;
+let _toastTimer = null;
 function showToast(msg, type = "") {
   const t = document.getElementById("toast");
   t.textContent = msg;
   t.className = `show ${type}`;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.className = ""; }, 3500);
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { t.className = ""; }, 3500);
 }
 
 // ── Util ──────────────────────────────────────────────────────────────────────
 
 function escapeHtml(str) {
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
-  // Brand from query param
   const params = new URLSearchParams(window.location.search);
-  const brand = params.get("brand") || "voltgrid";
-  loadBrand(brand);
+  loadBrand(params.get("brand") || "voltgrid");
 
-  // Brand toggle buttons
-  document.querySelectorAll(".brand-btn").forEach(btn => {
-    btn.addEventListener("click", () => loadBrand(btn.dataset.brand));
-  });
+  document.querySelectorAll(".brand-btn").forEach(btn =>
+    btn.addEventListener("click", () => loadBrand(btn.dataset.brand)));
 
-  // API key input
   const keyInput = document.getElementById("api-key-input");
   keyInput.value = apiKey;
   keyInput.addEventListener("change", () => {
     loadProviders();
+    refreshHistory();
+    refreshAnalytics();
     refreshAuditLog();
   });
 
-  // Auto-pick button
   document.getElementById("auto-pick-btn").addEventListener("click", () => launchJob(null));
 
   loadProviders();
-  document.getElementById("audit-card").style.display = "none";
+  refreshAnalytics();
 
-  // Reload providers every 30s
-  setInterval(loadProviders, 30000);
+  // Refresh providers + analytics every 15s
+  setInterval(() => { loadProviders(); refreshAnalytics(); refreshHistory(); }, 15000);
 });
