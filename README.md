@@ -1,5 +1,7 @@
 # Mini Compute Console
 
+[![CI](https://github.com/eliyas-05/mini-compute-console/actions/workflows/ci.yml/badge.svg)](https://github.com/eliyas-05/mini-compute-console/actions/workflows/ci.yml)
+
 A scaled-down GPU compute marketplace — built as a portfolio project for a software engineering internship application.
 
 Pick a provider, launch a job, and watch the cost tick up and logs stream in real time. No database, no build step, no framework overhead.
