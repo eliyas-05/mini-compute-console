@@ -1,0 +1,12 @@
+{
+  "name": "partnera",
+  "display_name": "PartnerA Cloud",
+  "logo_text": "◈ PartnerA",
+  "primary_color": "#E17055",
+  "accent_color": "#FDCB6E",
+  "bg_color": "#0A0A0E",
+  "card_color": "#14141E",
+  "text_color": "#F0EEE8",
+  "muted_color": "#999988",
+  "tagline": "Elastic GPU infrastructure — on demand"
+}

@@ -1,0 +1,12 @@
+{
+  "name": "voltgrid",
+  "display_name": "VoltGrid",
+  "logo_text": "⚡ VoltGrid",
+  "primary_color": "#6C5CE7",
+  "accent_color": "#00CEC9",
+  "bg_color": "#0D0D1A",
+  "card_color": "#16162A",
+  "text_color": "#E8E8F0",
+  "muted_color": "#8888AA",
+  "tagline": "On-demand GPU power for AI workloads"
+}

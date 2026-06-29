@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoltGrid</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="logo" id="logo-text">⚡ VoltGrid</div>
+    <div class="tagline" id="tagline-text">On-demand GPU power for AI workloads</div>
+  </div>
+  <div class="header-right">
+    <div class="brand-toggle">
+      <button class="brand-btn active" data-brand="voltgrid">VoltGrid</button>
+      <button class="brand-btn" data-brand="partnera">PartnerA</button>
+    </div>
+    <input
+      id="api-key-input"
+      class="api-key-input"
+      type="text"
+      placeholder="X-API-Key"
+      spellcheck="false"
+    />
+  </div>
+</header>
+
+<main>
+  <!-- Left: provider list -->
+  <section>
+    <div class="autopick-bar">
+      <div class="autopick-desc">
+        <strong>Smart routing</strong> — auto-selects the cheapest provider with ≥98% uptime
+      </div>
+      <button class="btn btn-accent" id="auto-pick-btn">⚡ Auto Pick Cheapest</button>
+    </div>
+
+    <div class="section-title">Available GPU Providers</div>
+    <table class="provider-table">
+      <thead>
+        <tr>
+          <th>Provider</th>
+          <th>GPU</th>
+          <th>Price</th>
+          <th>Uptime</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="provider-tbody">
+        <tr><td colspan="6" style="padding:24px;color:var(--muted);text-align:center">Loading providers…</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Right: status + audit -->
+  <aside class="right-panel">
+    <div>
+      <div class="section-title">Active Job</div>
+      <div class="card" id="job-panel">
+        <div class="no-job">No active job. Launch one from the provider list.</div>
+      </div>
+    </div>
+
+    <div id="audit-card" class="card">
+      <div class="section-title">Audit Log <span style="color:var(--muted);font-size:10px;text-transform:none">(admin key only)</span></div>
+      <div class="audit-list" id="audit-list">
+        <span class="audit-empty">No activity yet.</span>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<div id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
