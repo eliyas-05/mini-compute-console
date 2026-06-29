@@ -1,95 +1,95 @@
 # Mini Compute Console
 
-A full-stack GPU marketplace dashboard demonstrating job routing, live status tracking, multi-brand theming, and API security — built as a portfolio project modeled after the Tatari compute platform.
+A scaled-down GPU compute marketplace — built as a portfolio project for a software engineering internship application.
+
+Pick a provider, launch a job, and watch the cost tick up and logs stream in real time. No database, no build step, no framework overhead.
+
+![screenshot placeholder](https://placehold.co/800x400/0D0D1A/6C5CE7?text=Mini+Compute+Console)
 
 ## Quick Start
 
-### Backend
-
+**1. Start the backend**
 ```bash
 cd backend
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
+Interactive API docs: http://localhost:8000/docs
 
-API docs auto-generated at: http://localhost:8000/docs
-
-### Frontend
-
-Open `frontend/index.html` in a browser (no build step needed), or serve it locally:
-
+**2. Open the frontend**
 ```bash
 cd frontend
 python3 -m http.server 3000
-# then visit http://localhost:3000
+# visit http://localhost:3000
 ```
+
+The UI ships with the demo API key pre-filled (`demo-key-123`) — just open it and click Launch.
 
 ## API Keys
 
-| Key | User | Notes |
+| Key | Role | Notes |
 |-----|------|-------|
 | `demo-key-123` | demo-user | Standard access |
-| `admin-key-456` | admin-user | Enables audit log view in the UI |
+| `admin-key-456` | admin-user | Unlocks audit log panel in UI |
 | `test-key-789` | test-user | Standard access |
 
-Pass as header: `X-API-Key: demo-key-123`
+All protected routes require `X-API-Key: <key>` header.
 
 ## API Reference
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/providers` | ✅ | List all GPU providers with price, uptime, status |
-| POST | `/jobs` | ✅ | Launch a job. Body: `{"provider_id": "rp-us-east-1"}` or `{}` for auto-pick |
-| GET | `/jobs/{job_id}` | ✅ | Get job status, elapsed cost |
-| GET | `/jobs/{job_id}/logs` | ✅ | Get simulated training logs |
-| GET | `/brand/{brand_name}` | ❌ | Get brand config (colors, logo, name) |
-| GET | `/admin/audit` | ✅ admin | Full audit log of all job launches |
+| `GET` | `/providers` | ✅ | List 8 GPU providers with price, uptime, region, status |
+| `POST` | `/jobs` | ✅ | Launch a job. Pass `{"provider_id": "..."}` or `{}` to auto-pick |
+| `GET` | `/jobs/{job_id}` | ✅ | Job status + running cost |
+| `GET` | `/jobs/{job_id}/logs` | ✅ | Simulated training log stream |
+| `GET` | `/brand/{name}` | ❌ | Brand config (colors, logo, tagline) |
+| `GET` | `/admin/audit` | ✅ admin | Audit log of all job launches |
 
 ## Features
 
-### Smart Routing ("Tatari Engine")
-Auto-pick filters to `status == available` and `uptime_pct >= 98`, then picks the lowest `price_per_hour`. Mirrors the routing logic described in Tatari's platform architecture.
+### Smart provider routing
+`POST /jobs` with an empty body auto-selects the cheapest provider where `status == "available"` and `uptime_pct >= 98`. No random picks — deterministic, cheapest-first.
 
-### Live Job Simulation
-Jobs transition: `queued → running → complete` over ~90 seconds. Cost counter and log stream update on every poll — no background workers needed, all state derived from `started_at` timestamp.
+### Live job state machine
+Jobs move through `queued → running → complete` over ~90 seconds. Cost and logs are derived from `started_at` on every poll — no background threads, no database.
 
-### Multi-Brand Theming
-Visit `index.html?brand=tatari` or `index.html?brand=partnera`. Brand config (colors, logo, tagline) is fetched from `/brand/{name}` and applied via CSS custom properties — zero page reload, zero code change.
+### Simulated log streaming
+While a job is running, each `GET /jobs/{id}/logs` poll appends a new realistic training log line (loss, GPU util, checkpoint saves, ETA). Auto-scrolls in the UI.
 
-### Security Layer
-- **API key auth**: checked on every protected route, 401 on missing/invalid key
-- **Rate limiting**: 30 requests/minute per key, in-memory sliding window, no library dependency
-- **Audit log**: every job launch records `{timestamp, user, provider_id, job_id}`, viewable at `/admin/audit` with admin key
+### Rate limiting
+30 requests/minute per API key, in-memory sliding window — no third-party library.
+
+### Audit log
+Every job launch is recorded (`timestamp`, `user`, `provider_id`, `job_id`). Viewable at `/admin/audit` with the admin key, or in the UI sidebar.
+
+### Multi-brand theming
+`?brand=voltgrid` or `?brand=partnera` — brand colors, logo, and tagline are fetched from `/brand/{name}` and applied via CSS custom properties with no page reload.
 
 ## Project Structure
 
 ```
 mini-compute-console/
 ├── backend/
-│   ├── main.py          # FastAPI app, all routes
-│   ├── mock_data.py     # 10 mock GPU providers across RunPod, Vast.ai, Colo
-│   ├── job_engine.py    # Job state machine + log simulation
-│   ├── auth.py          # API key check + sliding-window rate limiter
+│   ├── main.py          # FastAPI app — all routes
+│   ├── mock_data.py     # 8 mock GPU providers (RunPod, Vast.ai, Colo)
+│   ├── job_engine.py    # In-memory job state machine + log simulator
+│   ├── auth.py          # API key auth + sliding-window rate limiter
 │   ├── audit_log.py     # In-memory audit trail
 │   └── requirements.txt
 ├── frontend/
-│   ├── index.html
-│   ├── style.css
-│   ├── app.js
+│   ├── index.html       # Single-page UI, no framework
+│   ├── style.css        # Dark theme with CSS custom properties
+│   ├── app.js           # Vanilla JS — fetch, polling, brand switching
 │   └── brands/
-│       ├── tatari.json
+│       ├── voltgrid.json
 │       └── partnera.json
 └── README.md
 ```
 
-## How it maps to the job posting
+## Tech choices
 
-| Requirement | Implementation |
-|-------------|----------------|
-| "Build the console" | Provider table with launch flow, live status panel |
-| "Make it brandable" | `?brand=` toggle, `/brand/{name}` endpoint, CSS vars |
-| "Connect frontend to APIs" | Vanilla JS polling FastAPI, no framework overhead |
-| "Live cost and usage" | Running cost computed from `elapsed_hours × price/hr` on every poll |
-| "Job logs" | Simulated log stream, auto-scrolling log box |
-| "Smart routing" | Auto-pick cheapest ≥98% uptime provider |
-| "Security" | API key auth, rate limiting, audit log |
+- **FastAPI** — async, auto-generates OpenAPI docs, Pydantic validation
+- **No ORM / no database** — in-memory state keeps the focus on application logic
+- **Vanilla JS** — no build step, no bundler; runs by opening a file
+- **CSS custom properties** — theming without a CSS-in-JS library

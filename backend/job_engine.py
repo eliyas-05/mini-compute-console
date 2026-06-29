@@ -76,11 +76,13 @@ def launch_job(provider_id: Optional[str] = None) -> dict:
     job = {
         "id": str(uuid.uuid4())[:8],
         "provider_id": provider["id"],
+        "provider_name": provider["name"],
+        "gpu_type": provider["gpu_type"],
+        "region": provider["region"],
+        "price_per_hour": provider["price_per_hour"],
         "status": "queued",
         "started_at": now,
         "cost_so_far": 0.0,
-        # internal fields, stripped before API responses
-        "_price_per_hour": provider["price_per_hour"],
         "_logs": [],
         "_last_log_tick": now,
     }
@@ -102,7 +104,7 @@ def get_job(job_id: str) -> Optional[dict]:
     if job["status"] == "running" and elapsed >= _JOB_DURATION_SECONDS:
         job["status"] = "complete"
 
-    job["cost_so_far"] = round(elapsed / 3600 * job["_price_per_hour"], 6)
+    job["cost_so_far"] = round(elapsed / 3600 * job["price_per_hour"], 6)
 
     # Append one fake log line per poll while running (max once per 3 s)
     if job["status"] == "running" and now - job["_last_log_tick"] >= 3:
