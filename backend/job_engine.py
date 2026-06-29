@@ -98,6 +98,10 @@ def get_job(job_id: str) -> Optional[dict]:
     now = time.time()
     elapsed = now - job["started_at"]
 
+    if job["status"] == "cancelled":
+        job["cost_so_far"] = round(elapsed / 3600 * job["price_per_hour"], 6)
+        return job
+
     if job["status"] == "queued" and elapsed >= 2:
         job["status"] = "running"
 
@@ -118,6 +122,22 @@ def get_job(job_id: str) -> Optional[dict]:
     return job
 
 
+def cancel_job(job_id: str) -> Optional[dict]:
+    job = _jobs.get(job_id)
+    if not job:
+        return None
+    if job["status"] in ("complete", "cancelled"):
+        return job
+    job["status"] = "cancelled"
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    job["_logs"].append(f"[{ts}] Job cancelled by user.")
+    return get_job(job_id)
+
+
 def get_logs(job_id: str) -> Optional[list[str]]:
     job = get_job(job_id)
     return list(job["_logs"]) if job else None
+
+
+def list_jobs() -> list[dict]:
+    return [get_job(jid) for jid in list(_jobs.keys())]

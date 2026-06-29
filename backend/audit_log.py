@@ -1,15 +1,15 @@
-import time
 from datetime import datetime, timezone
 
 _audit_entries: list[dict] = []
 
 
-def log_job_launch(user: str, provider_id: str, job_id: str):
+def log_action(user: str, provider_id: str, job_id: str, action: str = "launch"):
     _audit_entries.append({
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "user": user,
         "provider_id": provider_id,
         "job_id": job_id,
+        "action": action,
     })
 
 
