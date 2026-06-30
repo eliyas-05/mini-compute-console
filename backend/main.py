@@ -2,12 +2,13 @@ import asyncio
 import json
 import os
 
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from auth import verify_api_key
+from auth import verify_api_key, get_rate_info
 from audit_log import log_action, get_audit_log
 from analytics import compute_analytics
+from health_score import score_provider, score_all_providers
 from job_engine import get_job, get_logs, launch_job, cancel_job, list_jobs
 from mock_data import PROVIDERS
 from models import LaunchRequest, JobResponse, LogsResponse, AnalyticsResponse
@@ -15,7 +16,7 @@ from spot_prices import get_spot_prices, price_trend
 
 app = FastAPI(
     title="Mini Compute Console",
-    version="0.3.0",
+    version="0.4.0",
     description="Scaled-down GPU compute marketplace API with job routing, live streaming, and cost analytics.",
 )
 
@@ -42,6 +43,19 @@ def get_provider(provider_id: str, user: str = Depends(verify_api_key)):
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
     return provider
+
+
+@app.get("/providers/health", summary="Health scores for all providers")
+def all_health_scores(user: str = Depends(verify_api_key)):
+    return score_all_providers()
+
+
+@app.get("/providers/{provider_id}/health", summary="Health score for a single provider")
+def provider_health(provider_id: str, user: str = Depends(verify_api_key)):
+    provider = next((p for p in PROVIDERS if p["id"] == provider_id), None)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    return {"provider_id": provider_id, **score_provider(provider)}
 
 
 @app.get("/spot-prices", summary="Live spot prices for all providers")
@@ -124,8 +138,21 @@ async def ws_job_logs(websocket: WebSocket, job_id: str):
                 await websocket.send_json({"line": line})
             sent = len(logs)
 
+            # Stream live GPU utilization and cost
+            if job["status"] == "running":
+                await websocket.send_json({
+                    "util": job.get("gpu_util", 0),
+                    "gpu_samples": job.get("_gpu_samples", []),
+                    "cost": job["cost_so_far"],
+                    "rerouted_from": job.get("_rerouted_from"),
+                })
+
             if job["status"] in ("complete", "cancelled"):
-                await websocket.send_json({"status": job["status"], "cost": job["cost_so_far"]})
+                await websocket.send_json({
+                    "status": job["status"],
+                    "cost": job["cost_so_far"],
+                    "retry_count": job.get("_retry_count", 0),
+                })
                 break
 
             await asyncio.sleep(1)
@@ -161,6 +188,11 @@ def audit_log(user: str = Depends(verify_api_key)):
     return get_audit_log()
 
 
+@app.get("/rate-limit", summary="Current rate limit status for your API key")
+def rate_limit_status(user: str = Depends(verify_api_key), x_api_key: str = Header(default=None)):
+    return get_rate_info(x_api_key)
+
+
 @app.get("/health", include_in_schema=False)
 def health():
     return {"status": "ok"}
@@ -182,4 +214,7 @@ def _job_view(job: dict) -> dict:
         "started_at": job["started_at"],
         "cost_so_far": job["cost_so_far"],
         "projected_cost": job.get("projected_cost"),
+        "gpu_util": job.get("gpu_util", 0),
+        "rerouted_from": job.get("_rerouted_from"),
+        "retry_count": job.get("_retry_count", 0),
     }
