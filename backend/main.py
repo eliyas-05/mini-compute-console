@@ -10,9 +10,11 @@ from audit_log import log_action, get_audit_log
 from analytics import compute_analytics
 from health_score import score_provider, score_all_providers
 from job_engine import get_job, get_logs, launch_job, cancel_job, list_jobs
+import logger as L
 from mock_data import PROVIDERS
-from models import LaunchRequest, JobResponse, LogsResponse, AnalyticsResponse
+from models import LaunchRequest, JobResponse, LogsResponse, AnalyticsResponse, TemplateRequest, TemplateResponse
 from spot_prices import get_spot_prices, price_trend
+from templates import create_template, get_all_templates, get_one_template, remove_template
 
 app = FastAPI(
     title="Mini Compute Console",
@@ -83,11 +85,28 @@ def get_jobs(user: str = Depends(verify_api_key)):
 
 @app.post("/jobs", status_code=201, response_model=JobResponse, summary="Launch a job")
 def create_job(body: LaunchRequest, user: str = Depends(verify_api_key)):
+    kwargs = {
+        "provider_id": body.provider_id,
+        "priority": body.priority,
+        "budget_limit": body.budget_limit,
+        "template_id": body.template_id,
+    }
+    # If a template is given, fill in missing fields from it
+    if body.template_id:
+        tmpl = get_one_template(body.template_id)
+        if not tmpl:
+            raise HTTPException(status_code=404, detail="Template not found")
+        if not body.provider_id:
+            kwargs["provider_id"] = tmpl.get("provider_id")
+        if body.budget_limit is None:
+            kwargs["budget_limit"] = tmpl.get("budget_limit")
     try:
-        job = launch_job(body.provider_id, priority=body.priority)
+        job = launch_job(**kwargs)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     log_action(user, job["provider_id"], job["id"], action="launch")
+    L.info("api.job_launched", user=user, job_id=job["id"],
+           provider=job["provider_id"], budget_limit=body.budget_limit)
     return _job_view(job)
 
 
@@ -105,7 +124,44 @@ def cancel(job_id: str, user: str = Depends(verify_api_key)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     log_action(user, job["provider_id"], job_id, action="cancel")
+    L.info("api.job_cancelled", user=user, job_id=job_id)
     return _job_view(job)
+
+
+# ── Templates ─────────────────────────────────────────────────────────────────
+
+@app.get("/templates", response_model=list[TemplateResponse], summary="List job templates")
+def list_templates_route(user: str = Depends(verify_api_key)):
+    return get_all_templates()
+
+
+@app.post("/templates", status_code=201, response_model=TemplateResponse, summary="Save a job template")
+def create_template_route(body: TemplateRequest, user: str = Depends(verify_api_key)):
+    tmpl = create_template(
+        name=body.name,
+        description=body.description,
+        provider_id=body.provider_id,
+        priority=body.priority,
+        budget_limit=body.budget_limit,
+    )
+    L.info("api.template_created", user=user, template_id=tmpl["id"], name=tmpl["name"])
+    return tmpl
+
+
+@app.get("/templates/{template_id}", response_model=TemplateResponse, summary="Get a template")
+def get_template_route(template_id: str, user: str = Depends(verify_api_key)):
+    tmpl = get_one_template(template_id)
+    if not tmpl:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return tmpl
+
+
+@app.delete("/templates/{template_id}", status_code=204, summary="Delete a template")
+def delete_template_route(template_id: str, user: str = Depends(verify_api_key)):
+    if not get_one_template(template_id):
+        raise HTTPException(status_code=404, detail="Template not found")
+    remove_template(template_id)
+    L.info("api.template_deleted", user=user, template_id=template_id)
 
 
 @app.get("/jobs/{job_id}/logs", response_model=LogsResponse, summary="Get job log lines")
@@ -214,6 +270,9 @@ def _job_view(job: dict) -> dict:
         "started_at": job["started_at"],
         "cost_so_far": job["cost_so_far"],
         "projected_cost": job.get("projected_cost"),
+        "budget_limit": job.get("budget_limit"),
+        "budget_remaining": job.get("budget_remaining"),
+        "budget_pct_used": job.get("budget_pct_used"),
         "gpu_util": job.get("gpu_util", 0),
         "rerouted_from": job.get("_rerouted_from"),
         "retry_count": job.get("_retry_count", 0),

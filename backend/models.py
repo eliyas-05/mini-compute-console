@@ -23,6 +23,33 @@ class LaunchRequest(BaseModel):
         default="normal",
         description="high=best uptime, normal=cheapest spot, low=cheapest spot.",
     )
+    budget_limit: Optional[float] = Field(
+        default=None,
+        description="Auto-cancel when cost_so_far reaches this USD amount.",
+        gt=0,
+    )
+    template_id: Optional[str] = Field(
+        default=None,
+        description="Pre-fill settings from a saved template (overridden by explicit fields).",
+    )
+
+
+class TemplateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    description: str = Field(default="")
+    provider_id: Optional[str] = None
+    priority: Literal["high", "normal", "low"] = "normal"
+    budget_limit: Optional[float] = Field(default=None, gt=0)
+
+
+class TemplateResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    provider_id: Optional[str]
+    priority: Literal["high", "normal", "low"]
+    budget_limit: Optional[float]
+    created_at: float
 
 
 class SpotPrice(BaseModel):
@@ -45,6 +72,12 @@ class JobResponse(BaseModel):
     started_at: float
     cost_so_far: float
     projected_cost: Optional[float]
+    budget_limit: Optional[float] = None
+    budget_remaining: Optional[float] = None
+    budget_pct_used: Optional[float] = None
+    gpu_util: int = 0
+    rerouted_from: Optional[str] = None
+    retry_count: int = 0
 
 
 class LogsResponse(BaseModel):
