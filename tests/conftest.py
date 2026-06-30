@@ -8,12 +8,14 @@ import pytest
 from fastapi.testclient import TestClient
 from main import app
 
-DEMO_KEY = "demo-key-123"
-ADMIN_KEY = "admin-key-456"
-TEST_KEY = "test-key-789"
-HEADERS = {"X-API-Key": DEMO_KEY}
-ADMIN_HEADERS = {"X-API-Key": ADMIN_KEY}
-TEST_HEADERS = {"X-API-Key": TEST_KEY}
+DEMO_KEY   = "demo-key-123"
+ADMIN_KEY  = "admin-key-456"
+TEST_KEY   = "test-key-789"
+TENANT_KEY = "tenant-key-000"
+HEADERS        = {"X-API-Key": DEMO_KEY}
+ADMIN_HEADERS  = {"X-API-Key": ADMIN_KEY}
+TEST_HEADERS   = {"X-API-Key": TEST_KEY}
+TENANT_HEADERS = {"X-API-Key": TENANT_KEY}
 
 
 @pytest.fixture

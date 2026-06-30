@@ -1,6 +1,6 @@
 """Integration tests for the Mini Compute Console API."""
 import pytest
-from tests.conftest import HEADERS, ADMIN_HEADERS, TEST_HEADERS
+from tests.conftest import HEADERS, ADMIN_HEADERS, TEST_HEADERS, TENANT_HEADERS
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -209,6 +209,75 @@ def test_launch_from_template(client):
 def test_launch_from_missing_template(client):
     res = client.post("/jobs", json={"template_id": "ghost"}, headers=TEST_HEADERS)
     assert res.status_code == 404
+
+
+# ── Multi-tenant isolation ────────────────────────────────────────────────────
+
+def test_jobs_scoped_to_api_key(client):
+    r = client.post("/jobs", json={}, headers=TENANT_HEADERS)
+    assert r.status_code == 201
+    job_id = r.json()["job_id"]
+    # admin-user cannot see tenant-user's job
+    jobs = client.get("/jobs", headers=ADMIN_HEADERS).json()
+    assert not any(j["job_id"] == job_id for j in jobs)
+
+
+def test_job_not_accessible_cross_tenant(client):
+    r = client.post("/jobs", json={}, headers=TENANT_HEADERS)
+    assert r.status_code == 201
+    job_id = r.json()["job_id"]
+    assert client.get(f"/jobs/{job_id}", headers=ADMIN_HEADERS).status_code == 404
+
+
+def test_job_owner_field(client):
+    r = client.post("/jobs", json={}, headers=TENANT_HEADERS)
+    assert r.status_code == 201
+    assert r.json()["owner"] == "tenant-user"
+
+
+# ── Forecast ──────────────────────────────────────────────────────────────────
+
+def test_forecast_endpoint(client):
+    r = client.post("/jobs", json={}, headers=TENANT_HEADERS)
+    assert r.status_code == 201
+    job_id = r.json()["job_id"]
+    res = client.get(f"/jobs/{job_id}/forecast", headers=TENANT_HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert "estimated_final_cost" in data
+    assert "eta_seconds" in data
+    assert "burn_rate_per_hour" in data
+    assert "budget_breach_prob" in data
+
+
+def test_forecast_cross_tenant_404(client):
+    r = client.post("/jobs", json={}, headers=TENANT_HEADERS)
+    assert r.status_code == 201
+    job_id = r.json()["job_id"]
+    assert client.get(f"/jobs/{job_id}/forecast", headers=ADMIN_HEADERS).status_code == 404
+
+
+# ── SLA tracker ───────────────────────────────────────────────────────────────
+
+def test_sla_all_providers(client):
+    client.get("/providers", headers=TENANT_HEADERS)
+    res = client.get("/providers/sla", headers=TENANT_HEADERS)
+    assert res.status_code == 200
+    assert isinstance(res.json(), dict)
+
+
+def test_sla_single_provider(client):
+    client.get("/providers", headers=TENANT_HEADERS)
+    res = client.get("/providers/runpod-a100-us-east/sla", headers=TENANT_HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert "sla_pct" in data
+    assert "grade" in data
+    assert "incidents" in data
+
+
+def test_sla_unknown_provider(client):
+    assert client.get("/providers/ghost/sla", headers=TENANT_HEADERS).status_code == 404
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
