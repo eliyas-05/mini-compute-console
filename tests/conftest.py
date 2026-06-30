@@ -18,6 +18,14 @@ TEST_HEADERS   = {"X-API-Key": TEST_KEY}
 TENANT_HEADERS = {"X-API-Key": TENANT_KEY}
 
 
+@pytest.fixture(autouse=True)
+def reset_jobs():
+    import job_engine
+    job_engine._jobs.clear()
+    yield
+    job_engine._jobs.clear()
+
+
 @pytest.fixture
 def client():
     with TestClient(app) as c:

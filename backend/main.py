@@ -2,8 +2,9 @@ import asyncio
 import json
 import os
 
-from fastapi import FastAPI, Depends, HTTPException, Header, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 
 from auth import verify_api_key, get_rate_info
 from audit_log import log_action, get_audit_log
@@ -11,6 +12,9 @@ from analytics import compute_analytics
 from health_score import score_provider, score_all_providers
 from job_engine import get_job, get_job_for_owner, get_logs, launch_job, cancel_job, list_jobs
 from forecast import forecast_job
+from metrics import generate_metrics
+from pubsub import subscribe, unsubscribe, subscriber_count
+from report import job_report
 from sla_tracker import record_sample, get_sla, get_all_slas
 import logger as L
 from mock_data import PROVIDERS
@@ -20,7 +24,7 @@ from templates import create_template, get_all_templates, get_one_template, remo
 
 app = FastAPI(
     title="Mini Compute Console",
-    version="0.5.0",
+    version="0.6.0",
     description="Scaled-down GPU compute marketplace API with job routing, live streaming, and cost analytics.",
 )
 
@@ -96,9 +100,23 @@ def spot_prices(user: str = Depends(verify_api_key)):
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 
-@app.get("/jobs", summary="List jobs (scoped to your API key)")
-def get_jobs(user: str = Depends(verify_api_key)):
-    return [_job_view(j) for j in list_jobs(owner=user)]
+@app.get("/jobs", summary="List jobs (scoped to your API key, paginated)")
+def get_jobs(
+    user: str = Depends(verify_api_key),
+    response: Response = None,
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    limit: int = Query(default=50, ge=1, le=200, description="Items per page"),
+):
+    all_jobs = [_job_view(j) for j in list_jobs(owner=user)]
+    total    = len(all_jobs)
+    start    = (page - 1) * limit
+    end      = start + limit
+    page_jobs = all_jobs[start:end]
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+        response.headers["X-Page"]        = str(page)
+        response.headers["X-Total-Pages"] = str(max(1, -(-total // limit)))
+    return page_jobs
 
 
 @app.post("/jobs", status_code=201, response_model=JobResponse, summary="Launch a job")
@@ -191,6 +209,35 @@ def delete_template_route(template_id: str, user: str = Depends(verify_api_key))
     L.info("api.template_deleted", user=user, template_id=template_id)
 
 
+@app.get("/jobs/{job_id}/report", summary="Efficiency report for a job")
+def job_report_route(job_id: str, user: str = Depends(verify_api_key)):
+    job = get_job_for_owner(job_id, user)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job_report(job)
+
+
+@app.post("/jobs/{job_id}/clone", status_code=201, response_model=JobResponse,
+          summary="Clone a job with identical settings")
+def clone_job(job_id: str, user: str = Depends(verify_api_key)):
+    src = get_job_for_owner(job_id, user)
+    if not src:
+        raise HTTPException(status_code=404, detail="Job not found")
+    try:
+        job = launch_job(
+            provider_id  = src["provider_id"],
+            priority     = src.get("priority", "normal"),
+            budget_limit = src.get("budget_limit"),
+            template_id  = src.get("template_id"),
+            owner        = user,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    log_action(user, job["provider_id"], job["id"], action="launch")
+    L.info("api.job_cloned", user=user, source_job=job_id, new_job=job["id"])
+    return _job_view(job)
+
+
 @app.get("/jobs/{job_id}/logs", response_model=LogsResponse, summary="Get job log lines")
 def job_logs(job_id: str, user: str = Depends(verify_api_key)):
     logs = get_logs(job_id, owner=user)
@@ -274,6 +321,43 @@ def audit_log(user: str = Depends(verify_api_key)):
 @app.get("/rate-limit", summary="Current rate limit status for your API key")
 def rate_limit_status(user: str = Depends(verify_api_key), x_api_key: str = Header(default=None)):
     return get_rate_info(x_api_key)
+
+
+@app.get("/metrics", response_class=PlainTextResponse,
+         summary="Prometheus-compatible metrics scrape endpoint")
+def prometheus_metrics():
+    return PlainTextResponse(generate_metrics(), media_type="text/plain; version=0.0.4")
+
+
+@app.get("/system/info", summary="API version, uptime, and live connection count")
+def system_info(user: str = Depends(verify_api_key)):
+    import time, os
+    return {
+        "version":         "0.6.0",
+        "ws_subscribers":  subscriber_count(),
+        "server_pid":      os.getpid(),
+        "providers_total": len(PROVIDERS),
+        "providers_available": sum(1 for p in PROVIDERS if p["status"] == "available"),
+    }
+
+
+@app.websocket("/ws/events")
+async def ws_events(websocket: WebSocket):
+    """
+    Global event stream. Broadcasts job lifecycle events to all connected clients.
+    No auth required — events contain only public job IDs and statuses.
+    Subscribe from any tab; receive updates when jobs anywhere transition state.
+    """
+    await websocket.accept()
+    subscribe(websocket)
+    try:
+        while True:
+            await asyncio.sleep(30)
+            await websocket.send_json({"type": "ping"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        unsubscribe(websocket)
 
 
 @app.get("/health", include_in_schema=False)

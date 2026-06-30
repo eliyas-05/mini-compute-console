@@ -280,6 +280,83 @@ def test_sla_unknown_provider(client):
     assert client.get("/providers/ghost/sla", headers=TENANT_HEADERS).status_code == 404
 
 
+# ── Job report ────────────────────────────────────────────────────────────────
+
+def test_job_report(client):
+    r = client.post("/jobs", json={}, headers=TENANT_HEADERS)
+    assert r.status_code == 201
+    res = client.get(f"/jobs/{r.json()['job_id']}/report", headers=TENANT_HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert "efficiency_score" in data
+    assert "efficiency_grade" in data
+    assert "gpu_util" in data
+    assert "recommendation" in data
+
+
+def test_job_report_cross_tenant_404(client):
+    r = client.post("/jobs", json={}, headers=TENANT_HEADERS)
+    assert client.get(f"/jobs/{r.json()['job_id']}/report", headers=ADMIN_HEADERS).status_code == 404
+
+
+# ── Job clone ─────────────────────────────────────────────────────────────────
+
+def test_clone_job(client):
+    r = client.post("/jobs", json={"priority": "high"}, headers=TENANT_HEADERS)
+    assert r.status_code == 201
+    jid = r.json()["job_id"]
+    clone = client.post(f"/jobs/{jid}/clone", headers=TENANT_HEADERS)
+    assert clone.status_code == 201
+    assert clone.json()["job_id"] != jid
+    assert clone.json()["priority"] == "high"
+
+
+def test_clone_cross_tenant_404(client):
+    r = client.post("/jobs", json={}, headers=TENANT_HEADERS)
+    assert client.post(f"/jobs/{r.json()['job_id']}/clone", headers=ADMIN_HEADERS).status_code == 404
+
+
+# ── Pagination ────────────────────────────────────────────────────────────────
+
+def test_jobs_pagination_headers(client):
+    for _ in range(3):
+        client.post("/jobs", json={}, headers=TENANT_HEADERS)
+    res = client.get("/jobs?page=1&limit=2", headers=TENANT_HEADERS)
+    assert res.status_code == 200
+    assert len(res.json()) == 2
+    assert res.headers["x-total-count"] == "3"
+    assert res.headers["x-total-pages"] == "2"
+
+
+def test_jobs_pagination_page2(client):
+    for _ in range(3):
+        client.post("/jobs", json={}, headers=TENANT_HEADERS)
+    res = client.get("/jobs?page=2&limit=2", headers=TENANT_HEADERS)
+    assert res.status_code == 200
+    assert len(res.json()) == 1
+
+
+# ── Prometheus metrics ────────────────────────────────────────────────────────
+
+def test_metrics_endpoint(client):
+    res = client.get("/metrics")
+    assert res.status_code == 200
+    assert "voltgrid_jobs_total" in res.text
+    assert "voltgrid_spend_dollars_total" in res.text
+    assert "voltgrid_providers_total" in res.text
+
+
+# ── System info ───────────────────────────────────────────────────────────────
+
+def test_system_info(client):
+    res = client.get("/system/info", headers=TENANT_HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert "version" in data
+    assert "ws_subscribers" in data
+    assert "providers_total" in data
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 def test_health(client):

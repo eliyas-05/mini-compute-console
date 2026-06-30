@@ -8,6 +8,7 @@ from budget import check_budget, budget_remaining, budget_pct_used
 from database import upsert_job, append_log, load_all_jobs, init_db
 from logger import info, warn
 from mock_data import PROVIDERS
+from pubsub import broadcast_sync
 from spot_prices import get_spot_price, get_spot_prices
 
 _jobs: dict[str, dict] = {}
@@ -136,6 +137,8 @@ def launch_job(
     upsert_job(job)
     info("job.launched", job_id=job["id"], provider=provider["id"],
          priority=priority, budget_limit=budget_limit, owner=owner)
+    broadcast_sync({"type": "job_launched", "job_id": job["id"],
+                    "provider": provider["id"], "owner": owner, "status": "queued"})
     return job
 
 
@@ -153,9 +156,13 @@ def get_job(job_id: str) -> Optional[dict]:
 
     if job["status"] == "queued" and elapsed >= 2:
         job["status"] = "running"
+        broadcast_sync({"type": "job_running", "job_id": job_id,
+                        "provider": job["provider_id"], "owner": job.get("owner")})
 
     if job["status"] == "running" and elapsed >= _JOB_DURATION_SECONDS:
         job["status"] = "complete"
+        broadcast_sync({"type": "job_complete", "job_id": job_id,
+                        "cost": job["cost_so_far"], "owner": job.get("owner")})
 
     job["cost_so_far"] = round(elapsed / 3600 * job["price_per_hour"], 6)
 
@@ -209,6 +216,8 @@ def get_job(job_id: str) -> Optional[dict]:
         job["_logs"].append(line)
         append_log(job["id"], line)
         upsert_job(job)
+        broadcast_sync({"type": "job_cancelled", "job_id": job_id,
+                        "reason": "budget", "owner": job.get("owner")})
 
     if job["status"] == "complete" and not any("complete" in l for l in job["_logs"]):
         ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
