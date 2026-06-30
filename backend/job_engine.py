@@ -4,10 +4,23 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from budget import check_budget, budget_remaining, budget_pct_used
+from database import upsert_job, append_log, load_all_jobs, init_db
+from logger import info, warn
 from mock_data import PROVIDERS
 from spot_prices import get_spot_price, get_spot_prices
 
 _jobs: dict[str, dict] = {}
+
+def _boot():
+    init_db()
+    for job in load_all_jobs():
+        # Mark stale running/queued jobs as complete on restart
+        if job["status"] in ("queued", "running"):
+            job["status"] = "complete"
+        _jobs[job["id"]] = job
+
+_boot()
 
 _JOB_DURATION_SECONDS = 90
 
@@ -72,7 +85,12 @@ def _auto_pick_provider(priority: str = "normal") -> Optional[dict]:
 _PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
 
 
-def launch_job(provider_id: Optional[str] = None, priority: str = "normal") -> dict:
+def launch_job(
+    provider_id: Optional[str] = None,
+    priority: str = "normal",
+    budget_limit: Optional[float] = None,
+    template_id: Optional[str] = None,
+) -> dict:
     if provider_id:
         provider = _get_provider(provider_id)
         if not provider:
@@ -102,6 +120,9 @@ def launch_job(provider_id: Optional[str] = None, priority: str = "normal") -> d
         "started_at": now,
         "cost_so_far": 0.0,
         "projected_cost": None,
+        "budget_limit": budget_limit,
+        "template_id": template_id,
+        "created_at": now,
         "gpu_util": 0,
         "_gpu_samples": [],
         "_logs": [],
@@ -110,6 +131,9 @@ def launch_job(provider_id: Optional[str] = None, priority: str = "normal") -> d
         "_rerouted_from": None,
     }
     _jobs[job["id"]] = job
+    upsert_job(job)
+    info("job.launched", job_id=job["id"], provider=provider["id"],
+         priority=priority, budget_limit=budget_limit)
     return job
 
 
@@ -169,12 +193,31 @@ def get_job(job_id: str) -> Optional[dict]:
 
     # Append one fake log line per poll while running (max once per 3 s)
     if job["status"] == "running" and now - job["_last_log_tick"] >= 3:
-        job["_logs"].append(_make_log_line(elapsed))
+        line = _make_log_line(elapsed)
+        job["_logs"].append(line)
+        append_log(job["id"], line)
         job["_last_log_tick"] = now
+        upsert_job(job)
+
+    # Budget guardrail — auto-cancel if cost exceeds limit
+    if check_budget(job):
+        job["status"] = "cancelled"
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        line = f"[{ts}] Budget limit ${job['budget_limit']:.4f} reached — job auto-cancelled."
+        job["_logs"].append(line)
+        append_log(job["id"], line)
+        upsert_job(job)
 
     if job["status"] == "complete" and not any("complete" in l for l in job["_logs"]):
         ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-        job["_logs"].append(f"[{ts}] Job complete. Final cost: ${job['cost_so_far']:.4f}")
+        line = f"[{ts}] Job complete. Final cost: ${job['cost_so_far']:.4f}"
+        job["_logs"].append(line)
+        append_log(job["id"], line)
+        upsert_job(job)
+
+    # Add budget metadata to job for API consumers
+    job["budget_remaining"] = budget_remaining(job)
+    job["budget_pct_used"]  = budget_pct_used(job)
 
     return job
 
