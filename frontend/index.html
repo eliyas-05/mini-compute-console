@@ -58,7 +58,13 @@
     <!-- Auto-pick -->
     <div class="autopick-bar">
       <div class="autopick-desc">
-        <strong>Smart routing</strong> — auto-selects cheapest provider with ≥98% uptime
+        <strong>Smart routing</strong> — auto-selects provider based on priority
+        <div class="priority-row">
+          <span class="priority-label">Priority:</span>
+          <label class="priority-opt"><input type="radio" name="priority" value="high"> <span class="priority-chip high">High</span></label>
+          <label class="priority-opt"><input type="radio" name="priority" value="normal" checked> <span class="priority-chip normal">Normal</span></label>
+          <label class="priority-opt"><input type="radio" name="priority" value="low"> <span class="priority-chip low">Low</span></label>
+        </div>
       </div>
       <button class="btn btn-accent" id="auto-pick-btn">⚡ Auto Pick &amp; Launch</button>
     </div>
@@ -71,7 +77,8 @@
           <th>Provider</th>
           <th>GPU</th>
           <th>Region</th>
-          <th>Price</th>
+          <th>Base</th>
+          <th>Spot</th>
           <th>Uptime</th>
           <th>Status</th>
           <th></th>
@@ -108,6 +115,14 @@
       <div class="section-title">Active Job</div>
       <div class="card" id="job-panel">
         <div class="no-job">No active job.<br>Launch one from the provider list.</div>
+      </div>
+    </div>
+
+    <!-- Spend chart -->
+    <div class="card" id="chart-card">
+      <div class="section-title">Spend by Provider</div>
+      <div id="spend-chart" class="spend-chart">
+        <span class="chart-empty">Launch jobs to see spend breakdown.</span>
       </div>
     </div>
 

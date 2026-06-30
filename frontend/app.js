@@ -46,11 +46,17 @@ async function apiFetch(path, options = {}) {
   return res.json();
 }
 
-// ── Providers ─────────────────────────────────────────────────────────────────
+// ── Providers + Spot Prices ───────────────────────────────────────────────────
+
+let _spotCache = {};
 
 async function loadProviders() {
   try {
-    const providers = await apiFetch("/providers");
+    const [providers, spots] = await Promise.all([
+      apiFetch("/providers"),
+      apiFetch("/spot-prices"),
+    ]);
+    _spotCache = Object.fromEntries(spots.map(s => [s.provider_id, s]));
     renderProviders(providers);
   } catch (e) { showToast(`Failed to load providers: ${e.message}`, "error"); }
 }
@@ -62,14 +68,22 @@ function renderProviders(providers) {
     const uptimeClass = p.uptime_pct >= 99 ? "uptime-high" : p.uptime_pct >= 98 ? "uptime-med" : "uptime-low";
     const dotClass    = p.status === "available" ? "dot-available" : "dot-busy";
     const available   = p.status === "available";
+    const spot        = _spotCache[p.id];
+    const spotPrice   = spot ? spot.spot_price : p.price_per_hour;
+    const trend       = spot ? spot.trend : "flat";
+    const trendIcon   = trend === "up" ? "▲" : trend === "down" ? "▼" : "—";
+    const trendClass  = trend === "up" ? "trend-up" : trend === "down" ? "trend-down" : "trend-flat";
+
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>
-        <div class="provider-name">${p.name}</div>
-      </td>
+      <td><div class="provider-name">${p.name}</div></td>
       <td><span class="gpu-badge">${p.gpu_type}</span></td>
       <td class="muted-text">${p.region}</td>
-      <td class="price">$${p.price_per_hour.toFixed(2)}<span class="price-unit">/hr</span></td>
+      <td class="price muted-text">$${p.price_per_hour.toFixed(2)}<span class="price-unit">/hr</span></td>
+      <td class="price">
+        $${spotPrice.toFixed(2)}<span class="price-unit">/hr</span>
+        <span class="trend-badge ${trendClass}">${trendIcon}</span>
+      </td>
       <td class="uptime ${uptimeClass}">${p.uptime_pct}%</td>
       <td><span class="status-dot ${dotClass}"></span>${p.status}</td>
       <td>
@@ -82,8 +96,13 @@ function renderProviders(providers) {
 
 // ── Launch ────────────────────────────────────────────────────────────────────
 
+function getSelectedPriority() {
+  return document.querySelector('input[name="priority"]:checked')?.value || "normal";
+}
+
 async function launchJob(providerId) {
-  const body = providerId ? { provider_id: providerId } : {};
+  const priority = getSelectedPriority();
+  const body = { priority, ...(providerId ? { provider_id: providerId } : {}) };
   try {
     const job = await apiFetch("/jobs", { method: "POST", body: JSON.stringify(body) });
     currentJobId = job.job_id;
@@ -170,7 +189,8 @@ function renderJobCard(job, logs) {
       <div>
         <div class="job-id">JOB-${job.job_id.toUpperCase()}</div>
         <div class="job-provider">${job.provider_name}</div>
-        <div class="job-detail">${job.gpu_type} · ${job.region} · $${job.price_per_hour.toFixed(2)}/hr</div>
+        <div class="job-detail">${job.gpu_type} · ${job.region}</div>
+        <div style="margin-top:4px"><span class="priority-chip ${job.priority}">${job.priority}</span></div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
         <span class="job-status-badge ${badgeClass}">${job.status}</span>
@@ -183,7 +203,12 @@ function renderJobCard(job, logs) {
         <div class="cost-label">Running Cost</div>
         <div class="cost-value" id="cost-ticker">$${job.cost_so_far.toFixed(4)}</div>
       </div>
-      <div class="cost-rate">$${job.price_per_hour.toFixed(2)}/hr</div>
+      <div style="text-align:right">
+        <div class="cost-rate">$${job.price_per_hour.toFixed(2)}/hr spot</div>
+        ${job.projected_cost != null
+          ? `<div class="projected-cost">~$${job.projected_cost.toFixed(4)} projected</div>`
+          : ""}
+      </div>
     </div>
 
     <div class="progress-bar-wrap">
@@ -265,7 +290,32 @@ async function refreshAnalytics() {
     document.getElementById("m-avg-cost").textContent    = `$${a.avg_cost_per_job.toFixed(4)}`;
     document.getElementById("m-top-provider").textContent =
       a.most_used_provider ? a.most_used_provider.split("·")[0].trim() : "—";
+    renderSpendChart(a.provider_breakdown);
   } catch (e) { /* silent */ }
+}
+
+// ── Spend bar chart ───────────────────────────────────────────────────────────
+
+function renderSpendChart(breakdown) {
+  const container = document.getElementById("spend-chart");
+  const entries = Object.entries(breakdown).sort((a, b) => b[1].total_spend - a[1].total_spend);
+  if (!entries.length) {
+    container.innerHTML = '<span class="chart-empty">Launch jobs to see spend breakdown.</span>';
+    return;
+  }
+  const max = Math.max(...entries.map(([, v]) => v.total_spend), 0.0001);
+  container.innerHTML = entries.map(([pid, stats]) => {
+    const pct = (stats.total_spend / max) * 100;
+    const label = pid.split("-").slice(0, 2).join("-");
+    return `
+      <div class="chart-row">
+        <div class="chart-label" title="${pid}">${label}</div>
+        <div class="chart-bar-wrap">
+          <div class="chart-bar" style="width:${pct}%"></div>
+        </div>
+        <div class="chart-value">$${stats.total_spend.toFixed(4)}</div>
+      </div>`;
+  }).join("");
 }
 
 // ── Audit log ─────────────────────────────────────────────────────────────────

@@ -330,6 +330,90 @@ main {
 .log-box .log-line:first-child { color: var(--muted); }
 .log-empty { color: var(--muted); font-style: italic; }
 
+/* ── Priority selector ── */
+.priority-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.priority-label { font-size: 11px; color: var(--muted); }
+.priority-opt { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.priority-opt input { display: none; }
+.priority-chip {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 99px;
+  text-transform: uppercase;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+.priority-opt input:checked + .priority-chip,
+.priority-chip:hover { opacity: 1; }
+.priority-opt input:not(:checked) + .priority-chip { opacity: 0.45; }
+.priority-chip.high   { background: rgba(255,107,107,0.15); color: #ff6b6b; border-color: rgba(255,107,107,0.3); }
+.priority-chip.normal { background: rgba(0,206,201,0.12);   color: var(--accent); border-color: rgba(0,206,201,0.25); }
+.priority-chip.low    { background: rgba(255,255,255,0.07); color: var(--muted);  border-color: rgba(255,255,255,0.12); }
+
+/* ── Spot price trend ── */
+.trend-badge {
+  font-size: 9px;
+  font-weight: 700;
+  margin-left: 4px;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.trend-up   { color: var(--danger); background: rgba(255,107,107,0.12); }
+.trend-down { color: var(--success); background: rgba(85,239,196,0.12); }
+.trend-flat { color: var(--muted); }
+
+/* ── Projected cost ── */
+.projected-cost {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* ── Spend bar chart ── */
+.spend-chart { display: flex; flex-direction: column; gap: 8px; }
+.chart-empty { color: var(--muted); font-size: 12px; font-style: italic; }
+.chart-row { display: flex; align-items: center; gap: 8px; }
+.chart-label {
+  font-size: 10px;
+  font-family: monospace;
+  color: var(--muted);
+  width: 80px;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chart-bar-wrap {
+  flex: 1;
+  background: rgba(255,255,255,0.05);
+  border-radius: 99px;
+  height: 8px;
+  overflow: hidden;
+}
+.chart-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+  border-radius: 99px;
+  transition: width 0.4s ease;
+  min-width: 4px;
+}
+.chart-value {
+  font-size: 10px;
+  font-family: monospace;
+  color: var(--accent);
+  width: 64px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
 /* ── WS badge ── */
 .ws-badge {
   color: var(--accent);
