@@ -1,6 +1,6 @@
 """Integration tests for the Mini Compute Console API."""
 import pytest
-from conftest import HEADERS, ADMIN_HEADERS
+from tests.conftest import HEADERS, ADMIN_HEADERS, TEST_HEADERS
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -151,6 +151,64 @@ def test_brand_voltgrid(client):
 
 def test_brand_unknown_returns_404(client):
     assert client.get("/brand/nonexistent").status_code == 404
+
+
+# ── Templates ─────────────────────────────────────────────────────────────────
+
+def test_create_template(client):
+    res = client.post("/templates", json={"name": "A100 fast", "priority": "high", "budget_limit": 1.0}, headers=TEST_HEADERS)
+    assert res.status_code == 201
+    data = res.json()
+    assert data["name"] == "A100 fast"
+    assert data["budget_limit"] == 1.0
+    assert "id" in data
+
+
+def test_list_templates(client):
+    client.post("/templates", json={"name": "tpl-list"}, headers=TEST_HEADERS)
+    res = client.get("/templates", headers=TEST_HEADERS)
+    assert res.status_code == 200
+    assert any(t["name"] == "tpl-list" for t in res.json())
+
+
+def test_get_template(client):
+    r = client.post("/templates", json={"name": "tpl-get"}, headers=TEST_HEADERS)
+    tid = r.json()["id"]
+    res = client.get(f"/templates/{tid}", headers=TEST_HEADERS)
+    assert res.status_code == 200
+    assert res.json()["id"] == tid
+
+
+def test_get_template_not_found(client):
+    assert client.get("/templates/nope", headers=TEST_HEADERS).status_code == 404
+
+
+def test_delete_template(client):
+    r = client.post("/templates", json={"name": "tpl-del"}, headers=TEST_HEADERS)
+    tid = r.json()["id"]
+    assert client.delete(f"/templates/{tid}", headers=TEST_HEADERS).status_code == 204
+    assert client.get(f"/templates/{tid}", headers=TEST_HEADERS).status_code == 404
+
+
+# ── Budget ────────────────────────────────────────────────────────────────────
+
+def test_launch_with_budget_limit(client):
+    res = client.post("/jobs", json={"priority": "normal", "budget_limit": 99.0}, headers=TEST_HEADERS)
+    assert res.status_code == 201
+    data = res.json()
+    assert data["budget_limit"] == 99.0
+
+
+def test_launch_from_template(client):
+    r = client.post("/templates", json={"name": "tpl-launch", "priority": "high", "budget_limit": 5.0}, headers=TEST_HEADERS)
+    tid = r.json()["id"]
+    res = client.post("/jobs", json={"template_id": tid}, headers=TEST_HEADERS)
+    assert res.status_code == 201
+
+
+def test_launch_from_missing_template(client):
+    res = client.post("/jobs", json={"template_id": "ghost"}, headers=TEST_HEADERS)
+    assert res.status_code == 404
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

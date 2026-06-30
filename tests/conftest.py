@@ -10,8 +10,10 @@ from main import app
 
 DEMO_KEY = "demo-key-123"
 ADMIN_KEY = "admin-key-456"
+TEST_KEY = "test-key-789"
 HEADERS = {"X-API-Key": DEMO_KEY}
 ADMIN_HEADERS = {"X-API-Key": ADMIN_KEY}
+TEST_HEADERS = {"X-API-Key": TEST_KEY}
 
 
 @pytest.fixture
