@@ -9,7 +9,9 @@ from auth import verify_api_key, get_rate_info
 from audit_log import log_action, get_audit_log
 from analytics import compute_analytics
 from health_score import score_provider, score_all_providers
-from job_engine import get_job, get_logs, launch_job, cancel_job, list_jobs
+from job_engine import get_job, get_job_for_owner, get_logs, launch_job, cancel_job, list_jobs
+from forecast import forecast_job
+from sla_tracker import record_sample, get_sla, get_all_slas
 import logger as L
 from mock_data import PROVIDERS
 from models import LaunchRequest, JobResponse, LogsResponse, AnalyticsResponse, TemplateRequest, TemplateResponse
@@ -18,7 +20,7 @@ from templates import create_template, get_all_templates, get_one_template, remo
 
 app = FastAPI(
     title="Mini Compute Console",
-    version="0.4.0",
+    version="0.5.0",
     description="Scaled-down GPU compute marketplace API with job routing, live streaming, and cost analytics.",
 )
 
@@ -36,7 +38,20 @@ _BRANDS_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "brands"
 
 @app.get("/providers", summary="List all GPU providers")
 def list_providers(user: str = Depends(verify_api_key)):
+    for p in PROVIDERS:
+        record_sample(p["id"], p["status"])
     return PROVIDERS
+
+
+# Static sub-paths MUST come before /{provider_id} or FastAPI will swallow them
+@app.get("/providers/health", summary="Health scores for all providers")
+def all_health_scores(user: str = Depends(verify_api_key)):
+    return score_all_providers()
+
+
+@app.get("/providers/sla", summary="SLA stats for all providers (5-min rolling window)")
+def all_slas(user: str = Depends(verify_api_key)):
+    return get_all_slas()
 
 
 @app.get("/providers/{provider_id}", summary="Get a single provider")
@@ -47,17 +62,20 @@ def get_provider(provider_id: str, user: str = Depends(verify_api_key)):
     return provider
 
 
-@app.get("/providers/health", summary="Health scores for all providers")
-def all_health_scores(user: str = Depends(verify_api_key)):
-    return score_all_providers()
-
-
 @app.get("/providers/{provider_id}/health", summary="Health score for a single provider")
 def provider_health(provider_id: str, user: str = Depends(verify_api_key)):
     provider = next((p for p in PROVIDERS if p["id"] == provider_id), None)
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
     return {"provider_id": provider_id, **score_provider(provider)}
+
+
+@app.get("/providers/{provider_id}/sla", summary="SLA stats for a single provider")
+def provider_sla(provider_id: str, user: str = Depends(verify_api_key)):
+    provider = next((p for p in PROVIDERS if p["id"] == provider_id), None)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    return get_sla(provider_id)
 
 
 @app.get("/spot-prices", summary="Live spot prices for all providers")
@@ -78,9 +96,9 @@ def spot_prices(user: str = Depends(verify_api_key)):
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 
-@app.get("/jobs", summary="List all jobs")
+@app.get("/jobs", summary="List jobs (scoped to your API key)")
 def get_jobs(user: str = Depends(verify_api_key)):
-    return [_job_view(j) for j in list_jobs()]
+    return [_job_view(j) for j in list_jobs(owner=user)]
 
 
 @app.post("/jobs", status_code=201, response_model=JobResponse, summary="Launch a job")
@@ -90,8 +108,8 @@ def create_job(body: LaunchRequest, user: str = Depends(verify_api_key)):
         "priority": body.priority,
         "budget_limit": body.budget_limit,
         "template_id": body.template_id,
+        "owner": user,
     }
-    # If a template is given, fill in missing fields from it
     if body.template_id:
         tmpl = get_one_template(body.template_id)
         if not tmpl:
@@ -112,20 +130,29 @@ def create_job(body: LaunchRequest, user: str = Depends(verify_api_key)):
 
 @app.get("/jobs/{job_id}", response_model=JobResponse, summary="Get job status and running cost")
 def job_status(job_id: str, user: str = Depends(verify_api_key)):
-    job = get_job(job_id)
+    job = get_job_for_owner(job_id, user)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return _job_view(job)
+
+
+@app.get("/jobs/{job_id}/forecast", summary="Cost forecast and ETA for a running job")
+def job_forecast(job_id: str, user: str = Depends(verify_api_key)):
+    job = get_job_for_owner(job_id, user)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return forecast_job(job)
 
 
 @app.delete("/jobs/{job_id}", summary="Cancel a running job")
 def cancel(job_id: str, user: str = Depends(verify_api_key)):
-    job = cancel_job(job_id)
+    job = get_job_for_owner(job_id, user)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    cancelled = cancel_job(job_id)
     log_action(user, job["provider_id"], job_id, action="cancel")
     L.info("api.job_cancelled", user=user, job_id=job_id)
-    return _job_view(job)
+    return _job_view(cancelled)
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────
@@ -166,7 +193,7 @@ def delete_template_route(template_id: str, user: str = Depends(verify_api_key))
 
 @app.get("/jobs/{job_id}/logs", response_model=LogsResponse, summary="Get job log lines")
 def job_logs(job_id: str, user: str = Depends(verify_api_key)):
-    logs = get_logs(job_id)
+    logs = get_logs(job_id, owner=user)
     if logs is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return {"job_id": job_id, "logs": logs}
@@ -276,4 +303,5 @@ def _job_view(job: dict) -> dict:
         "gpu_util": job.get("gpu_util", 0),
         "rerouted_from": job.get("_rerouted_from"),
         "retry_count": job.get("_retry_count", 0),
+        "owner": job.get("owner", "demo-user"),
     }

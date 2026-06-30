@@ -3,9 +3,10 @@ from fastapi import HTTPException, Header, Response
 from typing import Optional
 
 API_KEYS = {
-    "demo-key-123": "demo-user",
+    "demo-key-123":  "demo-user",
     "admin-key-456": "admin-user",
-    "test-key-789": "test-user",
+    "test-key-789":  "test-user",
+    "tenant-key-000": "tenant-user",
 }
 
 RATE_LIMIT = 30

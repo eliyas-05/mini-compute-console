@@ -90,6 +90,7 @@ def launch_job(
     priority: str = "normal",
     budget_limit: Optional[float] = None,
     template_id: Optional[str] = None,
+    owner: str = "demo-user",
 ) -> dict:
     if provider_id:
         provider = _get_provider(provider_id)
@@ -122,6 +123,7 @@ def launch_job(
         "projected_cost": None,
         "budget_limit": budget_limit,
         "template_id": template_id,
+        "owner": owner,
         "created_at": now,
         "gpu_util": 0,
         "_gpu_samples": [],
@@ -133,7 +135,7 @@ def launch_job(
     _jobs[job["id"]] = job
     upsert_job(job)
     info("job.launched", job_id=job["id"], provider=provider["id"],
-         priority=priority, budget_limit=budget_limit)
+         priority=priority, budget_limit=budget_limit, owner=owner)
     return job
 
 
@@ -234,10 +236,26 @@ def cancel_job(job_id: str) -> Optional[dict]:
     return get_job(job_id)
 
 
-def get_logs(job_id: str) -> Optional[list[str]]:
+def get_logs(job_id: str, owner: Optional[str] = None) -> Optional[list[str]]:
     job = get_job(job_id)
-    return list(job["_logs"]) if job else None
+    if not job:
+        return None
+    if owner and job.get("owner") != owner:
+        return None
+    return list(job["_logs"])
 
 
-def list_jobs() -> list[dict]:
-    return [get_job(jid) for jid in list(_jobs.keys())]
+def list_jobs(owner: Optional[str] = None) -> list[dict]:
+    jobs = [get_job(jid) for jid in list(_jobs.keys())]
+    if owner:
+        jobs = [j for j in jobs if j and j.get("owner") == owner]
+    return [j for j in jobs if j]
+
+
+def get_job_for_owner(job_id: str, owner: str) -> Optional[dict]:
+    job = get_job(job_id)
+    if not job:
+        return None
+    if job.get("owner") != owner:
+        return None
+    return job

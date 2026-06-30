@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     retry_count         INTEGER NOT NULL DEFAULT 0,
     rerouted_from       TEXT,
     template_id         TEXT,
+    owner               TEXT NOT NULL DEFAULT 'demo-user',
     created_at          REAL NOT NULL
 );
 
@@ -86,12 +87,12 @@ def upsert_job(job: dict):
               (id, provider_id, provider_name, gpu_type, region, priority,
                price_per_hour, base_price_per_hour, status, started_at,
                cost_so_far, projected_cost, budget_limit, retry_count,
-               rerouted_from, template_id, created_at)
+               rerouted_from, template_id, owner, created_at)
             VALUES
               (:id, :provider_id, :provider_name, :gpu_type, :region, :priority,
                :price_per_hour, :base_price_per_hour, :status, :started_at,
                :cost_so_far, :projected_cost, :budget_limit, :retry_count,
-               :rerouted_from, :template_id, :created_at)
+               :rerouted_from, :template_id, :owner, :created_at)
             ON CONFLICT(id) DO UPDATE SET
               status              = excluded.status,
               cost_so_far         = excluded.cost_so_far,
@@ -118,6 +119,7 @@ def upsert_job(job: dict):
             "retry_count":          job.get("_retry_count", 0),
             "rerouted_from":        job.get("_rerouted_from"),
             "template_id":          job.get("template_id"),
+            "owner":                job.get("owner", "demo-user"),
             "created_at":           job.get("created_at", job["started_at"]),
         })
 

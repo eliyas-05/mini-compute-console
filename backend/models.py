@@ -78,6 +78,7 @@ class JobResponse(BaseModel):
     gpu_util: int = 0
     rerouted_from: Optional[str] = None
     retry_count: int = 0
+    owner: str = "demo-user"
 
 
 class LogsResponse(BaseModel):
