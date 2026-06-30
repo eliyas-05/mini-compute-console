@@ -102,8 +102,12 @@ def launch_job(provider_id: Optional[str] = None, priority: str = "normal") -> d
         "started_at": now,
         "cost_so_far": 0.0,
         "projected_cost": None,
+        "gpu_util": 0,
+        "_gpu_samples": [],
         "_logs": [],
         "_last_log_tick": now,
+        "_retry_count": 0,
+        "_rerouted_from": None,
     }
     _jobs[job["id"]] = job
     return job
@@ -134,6 +138,34 @@ def get_job(job_id: str) -> Optional[dict]:
         job["projected_cost"] = round(_JOB_DURATION_SECONDS / 3600 * job["price_per_hour"], 6)
     elif job["status"] == "complete":
         job["projected_cost"] = job["cost_so_far"]
+
+    # Retry: if still queued and provider went busy, re-route to next best
+    if job["status"] == "queued" and job["_retry_count"] < 3:
+        provider = _get_provider(job["provider_id"])
+        if provider and provider["status"] == "busy":
+            next_provider = _auto_pick_provider(job.get("priority", "normal"))
+            if next_provider and next_provider["id"] != job["provider_id"]:
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                job["_logs"].append(
+                    f"[{ts}] Provider busy — re-routing to {next_provider['name']}"
+                )
+                job["_rerouted_from"] = job["provider_id"]
+                job["provider_id"]    = next_provider["id"]
+                job["provider_name"]  = next_provider["name"]
+                job["gpu_type"]       = next_provider["gpu_type"]
+                job["region"]         = next_provider["region"]
+                job["price_per_hour"] = get_spot_price(next_provider["id"])
+                job["base_price_per_hour"] = next_provider["price_per_hour"]
+                job["_retry_count"] += 1
+
+    # GPU utilization sampling while running
+    if job["status"] == "running":
+        util = random.randint(88, 99)
+        job["gpu_util"] = util
+        samples = job["_gpu_samples"]
+        samples.append(util)
+        if len(samples) > 20:
+            samples.pop(0)
 
     # Append one fake log line per poll while running (max once per 3 s)
     if job["status"] == "running" and now - job["_last_log_tick"] >= 3:
