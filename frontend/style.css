@@ -24,6 +24,41 @@
   --transition: 0.2s ease;
 }
 
+/* ── Light mode overrides ── */
+body.light {
+  --bg: #F0F0FA;
+  --bg2: #E8E8F5;
+  --card: #FFFFFF;
+  --card2: #F5F5FD;
+  --border: rgba(0,0,0,0.08);
+  --border-bright: rgba(0,0,0,0.14);
+  --text: #1A1A2E;
+  --text-dim: #3A3A5C;
+  --muted: #7070A0;
+  --primary-glow: rgba(124,111,247,0.2);
+  --accent-glow: rgba(0,217,213,0.15);
+}
+body.light {
+  background-image:
+    radial-gradient(ellipse 80% 40% at 20% -5%, rgba(124,111,247,0.07) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 30% at 80% 110%, rgba(0,217,213,0.05) 0%, transparent 60%);
+}
+body.light header {
+  background: rgba(240,240,250,0.85);
+}
+body.light .metrics-bar {
+  background: rgba(240,240,250,0.7);
+}
+body.light .log-box {
+  background: #1A1A2E;
+}
+body.light .cost-display {
+  background: linear-gradient(135deg, rgba(0,217,213,0.05) 0%, rgba(124,111,247,0.04) 100%);
+}
+body.light .audit-item,
+body.light .forecast-stat,
+body.light .gpu-util-row { background: rgba(0,0,0,0.04); }
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
@@ -904,6 +939,21 @@ main {
 }
 
 /* ── Keyboard shortcut overlay ── */
+.theme-toggle {
+  background: transparent;
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 9px;
+  transition: all var(--transition);
+  line-height: 1;
+}
+.theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+.metric-events { flex: 1.4; }
+
 .kb-hint-btn {
   background: transparent;
   border: 1px solid var(--border-bright);

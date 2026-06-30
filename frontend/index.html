@@ -16,6 +16,7 @@
     <div class="tagline" id="tagline-text">On-demand GPU power for AI workloads</div>
   </div>
   <div class="header-right">
+    <button class="theme-toggle" id="theme-toggle" title="Toggle light/dark mode">☀</button>
     <button class="kb-hint-btn" id="kb-hint-btn" title="Keyboard shortcuts (?)">⌨</button>
     <div class="rate-limit-wrap" id="rate-limit-wrap" title="API requests remaining this minute">
       <div class="rate-limit-label">API <span id="rate-remaining">—</span>/30</div>
@@ -56,6 +57,10 @@
   <div class="metric">
     <div class="metric-value" id="m-top-provider">—</div>
     <div class="metric-label">Top Provider</div>
+  </div>
+  <div class="metric metric-events">
+    <div class="metric-value" id="m-live-event" style="font-size:11px;color:var(--accent)">Connecting…</div>
+    <div class="metric-label">Live Events <span class="ws-badge" style="margin-left:4px">● WS</span></div>
   </div>
 </div>
 

@@ -692,6 +692,63 @@ function initKeyboardShortcuts() {
   });
 }
 
+// ── Light / dark mode ────────────────────────────────────────────────────────
+
+function initTheme() {
+  const saved = localStorage.getItem("voltgrid-theme") || "dark";
+  applyTheme(saved);
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const next = document.body.classList.contains("light") ? "dark" : "light";
+    applyTheme(next);
+    localStorage.setItem("voltgrid-theme", next);
+  });
+}
+
+function applyTheme(theme) {
+  document.body.classList.toggle("light", theme === "light");
+  const btn = document.getElementById("theme-toggle");
+  if (btn) btn.textContent = theme === "light" ? "☾" : "☀";
+}
+
+// ── Global event stream (pub-sub WS) ─────────────────────────────────────────
+
+function connectEventStream() {
+  const ws = new WebSocket(`${WS_BASE}/ws/events`);
+  const el  = document.getElementById("m-live-event");
+
+  ws.onopen = () => {
+    if (el) el.textContent = "Connected";
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === "ping") return;
+
+    const labels = {
+      job_launched:  "Job launched",
+      job_running:   "Job started",
+      job_complete:  "Job complete",
+      job_cancelled: "Job cancelled",
+    };
+    const label = labels[msg.type] || msg.type;
+    const id    = msg.job_id ? ` · ${msg.job_id}` : "";
+    if (el) el.textContent = `${label}${id}`;
+
+    // Auto-refresh history + analytics on any state change
+    if (msg.type !== "ping") {
+      refreshHistory();
+      refreshAnalytics();
+    }
+  };
+
+  ws.onclose = () => {
+    if (el) el.textContent = "Reconnecting…";
+    setTimeout(connectEventStream, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
 // ── Util ──────────────────────────────────────────────────────────────────────
 
 function escapeHtml(str) {
@@ -723,6 +780,8 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("filter-priority").addEventListener("change", applyHistoryFilter);
 
   initKeyboardShortcuts();
+  initTheme();
+  connectEventStream();
 
   loadProviders();
   refreshAnalytics();
