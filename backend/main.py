@@ -11,10 +11,11 @@ from analytics import compute_analytics
 from job_engine import get_job, get_logs, launch_job, cancel_job, list_jobs
 from mock_data import PROVIDERS
 from models import LaunchRequest, JobResponse, LogsResponse, AnalyticsResponse
+from spot_prices import get_spot_prices, price_trend
 
 app = FastAPI(
     title="Mini Compute Console",
-    version="0.2.0",
+    version="0.3.0",
     description="Scaled-down GPU compute marketplace API with job routing, live streaming, and cost analytics.",
 )
 
@@ -43,6 +44,22 @@ def get_provider(provider_id: str, user: str = Depends(verify_api_key)):
     return provider
 
 
+@app.get("/spot-prices", summary="Live spot prices for all providers")
+def spot_prices(user: str = Depends(verify_api_key)):
+    from mock_data import PROVIDERS as _P
+    prices = get_spot_prices()
+    return [
+        {
+            "provider_id": p["id"],
+            "name": p["name"],
+            "base_price": p["price_per_hour"],
+            "spot_price": prices.get(p["id"], p["price_per_hour"]),
+            "trend": price_trend(p["id"]),
+        }
+        for p in _P
+    ]
+
+
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 
 @app.get("/jobs", summary="List all jobs")
@@ -53,7 +70,7 @@ def get_jobs(user: str = Depends(verify_api_key)):
 @app.post("/jobs", status_code=201, response_model=JobResponse, summary="Launch a job")
 def create_job(body: LaunchRequest, user: str = Depends(verify_api_key)):
     try:
-        job = launch_job(body.provider_id)
+        job = launch_job(body.provider_id, priority=body.priority)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     log_action(user, job["provider_id"], job["id"], action="launch")
@@ -159,7 +176,10 @@ def _job_view(job: dict) -> dict:
         "gpu_type": job["gpu_type"],
         "region": job["region"],
         "price_per_hour": job["price_per_hour"],
+        "base_price_per_hour": job.get("base_price_per_hour", job["price_per_hour"]),
+        "priority": job.get("priority", "normal"),
         "status": job["status"],
         "started_at": job["started_at"],
         "cost_so_far": job["cost_so_far"],
+        "projected_cost": job.get("projected_cost"),
     }
