@@ -111,9 +111,16 @@ function getSelectedPriority() {
   return document.querySelector('input[name="priority"]:checked')?.value || "normal";
 }
 
-async function launchJob(providerId) {
+async function launchJob(providerId, templateId) {
   const priority = getSelectedPriority();
-  const body = { priority, ...(providerId ? { provider_id: providerId } : {}) };
+  const budgetRaw = document.getElementById("budget-input")?.value;
+  const budgetLimit = budgetRaw ? parseFloat(budgetRaw) : null;
+  const body = {
+    priority,
+    ...(providerId   ? { provider_id: providerId }   : {}),
+    ...(templateId   ? { template_id: templateId }   : {}),
+    ...(budgetLimit  ? { budget_limit: budgetLimit }  : {}),
+  };
   try {
     const job = await apiFetch("/jobs", { method: "POST", body: JSON.stringify(body) });
     currentJobId = job.job_id;
@@ -291,6 +298,20 @@ function renderJobCard(job, logs) {
       <div class="progress-bar-fill" style="width:${progress}%"></div>
     </div>
 
+    ${job.budget_limit != null ? (() => {
+      const pct = job.budget_pct_used ?? 0;
+      const fillClass = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "";
+      return `<div class="budget-bar-wrap">
+        <div class="budget-bar-label">
+          <span>Budget</span>
+          <span>$${job.cost_so_far.toFixed(4)} / $${job.budget_limit.toFixed(2)} (${pct.toFixed(1)}%)</span>
+        </div>
+        <div class="budget-bar-bg">
+          <div class="budget-bar-fill ${fillClass}" style="width:${pct}%"></div>
+        </div>
+      </div>`;
+    })() : ""}
+
     ${job.rerouted_from ? `<div class="reroute-notice">↪ Re-routed from <span class="mono">${job.rerouted_from}</span> (${job.retry_count}× retry)</div>` : ""}
 
     ${job.status === "running" ? `
@@ -447,6 +468,68 @@ function showToast(msg, type = "") {
   _toastTimer = setTimeout(() => { t.className = ""; }, 3500);
 }
 
+// ── Templates ────────────────────────────────────────────────────────────────
+
+async function loadTemplates() {
+  try {
+    const templates = await apiFetch("/templates");
+    renderTemplates(templates);
+  } catch { /* silent */ }
+}
+
+function renderTemplates(templates) {
+  const el = document.getElementById("templates-list");
+  if (!templates.length) {
+    el.innerHTML = '<span class="chart-empty">No templates saved yet.</span>';
+    return;
+  }
+  el.innerHTML = templates.map(t => {
+    const meta = [
+      `<span class="priority-chip ${t.priority}">${t.priority}</span>`,
+      t.budget_limit ? `$${t.budget_limit.toFixed(2)} cap` : "no cap",
+      t.provider_id  ? t.provider_id : "auto-pick",
+    ].join(" · ");
+    return `<div class="template-row">
+      <div class="template-info">
+        <div class="template-name">${escapeHtml(t.name)}</div>
+        <div class="template-meta">${meta}</div>
+      </div>
+      <div class="template-actions">
+        <button class="btn-tpl-launch" onclick="launchJob(null,'${t.id}')">▶ Launch</button>
+        <button class="btn-tpl-del" onclick="deleteTemplate('${t.id}')">✕</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function saveCurrentAsTemplate() {
+  const name = prompt("Template name:");
+  if (!name) return;
+  const priority = getSelectedPriority();
+  const budgetRaw = document.getElementById("budget-input")?.value;
+  const budget_limit = budgetRaw ? parseFloat(budgetRaw) : null;
+  try {
+    await apiFetch("/templates", {
+      method: "POST",
+      body: JSON.stringify({ name, priority, budget_limit }),
+    });
+    showToast(`Template "${name}" saved`, "success");
+    loadTemplates();
+  } catch (e) { showToast(`Save failed: ${e.message}`, "error"); }
+}
+
+async function deleteTemplate(templateId) {
+  try {
+    const key = document.getElementById("api-key-input").value.trim() || apiKey;
+    await fetch(`${API_BASE}/templates/${templateId}`, {
+      method: "DELETE",
+      headers: { "X-API-Key": key },
+    });
+    showToast("Template deleted", "");
+    loadTemplates();
+  } catch (e) { showToast(`Delete failed: ${e.message}`, "error"); }
+}
+
 // ── Util ──────────────────────────────────────────────────────────────────────
 
 function escapeHtml(str) {
@@ -473,10 +556,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("auto-pick-btn").addEventListener("click", () => launchJob(null));
   document.getElementById("export-csv-btn").addEventListener("click", exportCSV);
+  document.getElementById("save-template-btn").addEventListener("click", saveCurrentAsTemplate);
 
   loadProviders();
   refreshAnalytics();
   refreshRateLimit();
+  loadTemplates();
 
   // Refresh providers + analytics every 15s, rate limit every 5s
   setInterval(() => { loadProviders(); refreshAnalytics(); refreshHistory(); }, 15000);

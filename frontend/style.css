@@ -541,3 +541,74 @@ main {
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+/* ── Budget input ── */
+.budget-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.budget-input {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 8px;
+  width: 100px;
+}
+.budget-input:focus { outline: none; border-color: var(--primary); }
+.budget-hint { color: var(--muted); font-size: 11px; }
+
+/* ── Budget progress bar (in job card) ── */
+.budget-bar-wrap {
+  margin-top: 10px;
+}
+.budget-bar-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.budget-bar-bg {
+  background: rgba(255,255,255,0.07);
+  border-radius: 4px;
+  height: 6px;
+  overflow: hidden;
+}
+.budget-bar-fill {
+  background: var(--success);
+  border-radius: 4px;
+  height: 100%;
+  transition: width 0.4s ease, background 0.4s ease;
+}
+.budget-bar-fill.warn { background: var(--warn); }
+.budget-bar-fill.danger { background: var(--danger); }
+
+/* ── Templates panel ── */
+.templates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.template-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 7px;
+  padding: 8px 12px;
+  gap: 8px;
+}
+.template-info { flex: 1; min-width: 0; }
+.template-name { font-size: 13px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.template-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.template-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.btn-tpl-launch { font-size: 11px; padding: 3px 9px; background: var(--primary); color: #fff; border: none; border-radius: 5px; cursor: pointer; }
+.btn-tpl-launch:hover { opacity: 0.85; }
+.btn-tpl-del { font-size: 11px; padding: 3px 7px; background: rgba(255,107,107,0.12); color: var(--danger); border: 1px solid rgba(255,107,107,0.25); border-radius: 5px; cursor: pointer; }
+.btn-tpl-del:hover { background: rgba(255,107,107,0.22); }

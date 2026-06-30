@@ -71,8 +71,22 @@
           <label class="priority-opt"><input type="radio" name="priority" value="normal" checked> <span class="priority-chip normal">Normal</span></label>
           <label class="priority-opt"><input type="radio" name="priority" value="low"> <span class="priority-chip low">Low</span></label>
         </div>
+        <div class="budget-row">
+          <span class="priority-label">Budget $:</span>
+          <input id="budget-input" class="budget-input" type="number" min="0.01" step="0.01" placeholder="unlimited" />
+          <span class="budget-hint" id="budget-hint"></span>
+        </div>
       </div>
       <button class="btn btn-accent" id="auto-pick-btn">⚡ Auto Pick &amp; Launch</button>
+    </div>
+
+    <!-- Templates panel -->
+    <div class="section-title" style="margin-top:20px;display:flex;align-items:center;justify-content:space-between">
+      Job Templates
+      <button class="btn btn-sm" id="save-template-btn" style="font-size:10px;padding:3px 10px;background:rgba(255,255,255,0.07);color:var(--muted);border:1px solid rgba(255,255,255,0.1)">＋ Save</button>
+    </div>
+    <div id="templates-list" class="templates-list">
+      <span class="chart-empty">No templates saved yet.</span>
     </div>
 
     <!-- Provider table -->
