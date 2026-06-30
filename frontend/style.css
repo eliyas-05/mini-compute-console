@@ -377,6 +377,71 @@ main {
   margin-top: 2px;
 }
 
+/* ── Rate limit bar ── */
+.rate-limit-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 90px;
+}
+.rate-limit-label {
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-align: right;
+}
+.rate-limit-bar-bg {
+  background: rgba(255,255,255,0.07);
+  border-radius: 99px;
+  height: 3px;
+  overflow: hidden;
+}
+.rate-limit-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--success);
+  transition: width 0.4s ease, background 0.4s ease;
+  width: 100%;
+}
+
+/* ── Health grade ── */
+.health-grade {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.grade-a { background: rgba(85,239,196,0.15); color: var(--success); }
+.grade-b { background: rgba(0,206,201,0.12);  color: var(--accent); }
+.grade-c { background: rgba(253,203,110,0.15); color: var(--warn); }
+.grade-d { background: rgba(255,107,107,0.15); color: var(--danger); }
+
+/* ── GPU sparkline ── */
+.gpu-util-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+.gpu-util-label { font-size: 10px; color: var(--muted); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; flex-shrink: 0; }
+.sparkline { flex: 1; height: 24px; overflow: visible; }
+.gpu-util-pct { font-size: 13px; font-weight: 700; color: var(--accent); font-family: monospace; flex-shrink: 0; width: 36px; text-align: right; }
+
+/* ── Reroute notice ── */
+.reroute-notice {
+  background: rgba(253,203,110,0.08);
+  border: 1px solid rgba(253,203,110,0.2);
+  border-radius: var(--radius);
+  color: var(--warn);
+  font-size: 11px;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+}
+
 /* ── Spend bar chart ── */
 .spend-chart { display: flex; flex-direction: column; gap: 8px; }
 .chart-empty { color: var(--muted); font-size: 12px; font-style: italic; }

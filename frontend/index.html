@@ -16,6 +16,12 @@
     <div class="tagline" id="tagline-text">On-demand GPU power for AI workloads</div>
   </div>
   <div class="header-right">
+    <div class="rate-limit-wrap" id="rate-limit-wrap" title="API requests remaining this minute">
+      <div class="rate-limit-label">API <span id="rate-remaining">—</span>/30</div>
+      <div class="rate-limit-bar-bg">
+        <div class="rate-limit-bar-fill" id="rate-bar"></div>
+      </div>
+    </div>
     <div class="brand-toggle">
       <button class="brand-btn active" data-brand="voltgrid">VoltGrid</button>
       <button class="brand-btn" data-brand="partnera">PartnerA</button>
@@ -80,6 +86,7 @@
           <th>Base</th>
           <th>Spot</th>
           <th>Uptime</th>
+          <th>Health</th>
           <th>Status</th>
           <th></th>
         </tr>
@@ -90,15 +97,20 @@
     </table>
 
     <!-- Job history -->
-    <div class="section-title" style="margin-top:28px">Job History</div>
+    <div class="section-title" style="margin-top:28px;display:flex;align-items:center;justify-content:space-between">
+      Job History
+      <button class="btn btn-sm" id="export-csv-btn" style="font-size:10px;padding:3px 10px;background:rgba(255,255,255,0.07);color:var(--muted);border:1px solid rgba(255,255,255,0.1)">⬇ Export CSV</button>
+    </div>
     <table class="provider-table">
       <thead>
         <tr>
           <th>Job ID</th>
           <th>Provider</th>
           <th>GPU</th>
+          <th>Priority</th>
           <th>Status</th>
           <th>Cost</th>
+          <th>Retries</th>
           <th></th>
         </tr>
       </thead>

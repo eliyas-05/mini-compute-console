@@ -48,15 +48,18 @@ async function apiFetch(path, options = {}) {
 
 // ── Providers + Spot Prices ───────────────────────────────────────────────────
 
-let _spotCache = {};
+let _spotCache   = {};
+let _healthCache = {};
 
 async function loadProviders() {
   try {
-    const [providers, spots] = await Promise.all([
+    const [providers, spots, health] = await Promise.all([
       apiFetch("/providers"),
       apiFetch("/spot-prices"),
+      apiFetch("/providers/health"),
     ]);
-    _spotCache = Object.fromEntries(spots.map(s => [s.provider_id, s]));
+    _spotCache   = Object.fromEntries(spots.map(s => [s.provider_id, s]));
+    _healthCache = health;
     renderProviders(providers);
   } catch (e) { showToast(`Failed to load providers: ${e.message}`, "error"); }
 }
@@ -73,6 +76,10 @@ function renderProviders(providers) {
     const trend       = spot ? spot.trend : "flat";
     const trendIcon   = trend === "up" ? "▲" : trend === "down" ? "▼" : "—";
     const trendClass  = trend === "up" ? "trend-up" : trend === "down" ? "trend-down" : "trend-flat";
+    const hs          = _healthCache[p.id];
+    const grade       = hs ? hs.grade : "—";
+    const gradeClass  = { A: "grade-a", B: "grade-b", C: "grade-c", D: "grade-d" }[grade] || "";
+    const score       = hs ? hs.composite : "—";
 
     const tr = document.createElement("tr");
     tr.innerHTML = `
@@ -85,6 +92,10 @@ function renderProviders(providers) {
         <span class="trend-badge ${trendClass}">${trendIcon}</span>
       </td>
       <td class="uptime ${uptimeClass}">${p.uptime_pct}%</td>
+      <td>
+        <span class="health-grade ${gradeClass}" title="Score: ${score}">${grade}</span>
+        <span class="muted-text" style="font-size:10px"> ${score}</span>
+      </td>
       <td><span class="status-dot ${dotClass}"></span>${p.status}</td>
       <td>
         <button class="btn btn-primary btn-sm" ${available ? "" : "disabled"}
@@ -139,17 +150,24 @@ function openWebSocket(jobId) {
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
 
-    if (msg.line) {
-      appendLogLine(msg.line);
+    if (msg.line) appendLogLine(msg.line);
+
+    if (msg.util !== undefined) {
+      updateGpuSparkline(msg.gpu_samples || [], msg.util);
+      if (msg.cost !== undefined) {
+        const el = document.getElementById("cost-ticker");
+        if (el) el.textContent = `$${msg.cost.toFixed(4)}`;
+      }
     }
 
     if (msg.status) {
-      // job finished — refresh card and stats
       apiFetch(`/jobs/${jobId}`).then(job => {
         renderJobCard(job, null);
         refreshHistory();
         refreshAnalytics();
       });
+      if (msg.retry_count > 0)
+        showToast(`Job re-routed ${msg.retry_count}× due to provider availability`, "");
     }
 
     if (msg.error) {
@@ -171,6 +189,64 @@ function appendLogLine(line) {
   div.textContent = line;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
+}
+
+// ── GPU sparkline ─────────────────────────────────────────────────────────────
+
+function updateGpuSparkline(samples, currentUtil) {
+  const el = document.getElementById("gpu-sparkline");
+  const utilEl = document.getElementById("gpu-util-pct");
+  if (!el) return;
+  if (utilEl) utilEl.textContent = `${currentUtil}%`;
+  if (!samples.length) return;
+
+  const W = 80, H = 24;
+  const max = 100, min = 80;
+  const pts = samples.map((v, i) => {
+    const x = (i / (samples.length - 1 || 1)) * W;
+    const y = H - ((v - min) / (max - min)) * H;
+    return `${x},${y}`;
+  }).join(" ");
+
+  el.innerHTML = `<polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+}
+
+// ── Rate limit bar ────────────────────────────────────────────────────────────
+
+async function refreshRateLimit() {
+  try {
+    const info = await apiFetch("/rate-limit");
+    const remaining = info.remaining;
+    const pct = (remaining / info.limit) * 100;
+    const el = document.getElementById("rate-remaining");
+    const bar = document.getElementById("rate-bar");
+    if (el) el.textContent = remaining;
+    if (bar) {
+      bar.style.width = `${pct}%`;
+      bar.style.background = pct > 50 ? "var(--success)" : pct > 20 ? "var(--warn)" : "var(--danger)";
+    }
+  } catch { /* silent */ }
+}
+
+// ── CSV export ────────────────────────────────────────────────────────────────
+
+async function exportCSV() {
+  try {
+    const jobs = await apiFetch("/jobs");
+    if (!jobs.length) { showToast("No jobs to export", ""); return; }
+    const headers = ["job_id","provider_id","provider_name","gpu_type","region","priority","status","price_per_hour","cost_so_far","projected_cost","retry_count","started_at"];
+    const rows = jobs.map(j => headers.map(h => {
+      const v = j[h] ?? "";
+      return typeof v === "string" && v.includes(",") ? `"${v}"` : v;
+    }).join(","));
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = `jobs-${Date.now()}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+    showToast(`Exported ${jobs.length} jobs`, "success");
+  } catch (e) { showToast(`Export failed: ${e.message}`, "error"); }
 }
 
 // ── Job card ──────────────────────────────────────────────────────────────────
@@ -214,6 +290,15 @@ function renderJobCard(job, logs) {
     <div class="progress-bar-wrap">
       <div class="progress-bar-fill" style="width:${progress}%"></div>
     </div>
+
+    ${job.rerouted_from ? `<div class="reroute-notice">↪ Re-routed from <span class="mono">${job.rerouted_from}</span> (${job.retry_count}× retry)</div>` : ""}
+
+    ${job.status === "running" ? `
+    <div class="gpu-util-row">
+      <span class="gpu-util-label">GPU Util</span>
+      <svg class="sparkline" id="gpu-sparkline" viewBox="0 0 80 24" preserveAspectRatio="none"></svg>
+      <span class="gpu-util-pct" id="gpu-util-pct">${job.gpu_util || 0}%</span>
+    </div>` : ""}
 
     <div class="section-title" style="margin-top:16px">
       Live Logs
@@ -271,8 +356,10 @@ function renderHistory(jobs) {
       <td><span class="mono">${j.job_id}</span></td>
       <td>${j.provider_name}</td>
       <td><span class="gpu-badge">${j.gpu_type}</span></td>
+      <td><span class="priority-chip ${j.priority}">${j.priority}</span></td>
       <td><span class="job-status-badge ${badgeClass}">${j.status}</span></td>
       <td class="price">$${j.cost_so_far.toFixed(4)}</td>
+      <td class="muted-text" style="text-align:center">${j.retry_count || 0}</td>
       <td>${cancelBtn}</td>
     </tr>`;
   }).join("");
@@ -385,10 +472,13 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document.getElementById("auto-pick-btn").addEventListener("click", () => launchJob(null));
+  document.getElementById("export-csv-btn").addEventListener("click", exportCSV);
 
   loadProviders();
   refreshAnalytics();
+  refreshRateLimit();
 
-  // Refresh providers + analytics every 15s
+  // Refresh providers + analytics every 15s, rate limit every 5s
   setInterval(() => { loadProviders(); refreshAnalytics(); refreshHistory(); }, 15000);
+  setInterval(refreshRateLimit, 5000);
 });
