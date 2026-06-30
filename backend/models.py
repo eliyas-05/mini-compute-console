@@ -17,8 +17,19 @@ class Provider(BaseModel):
 class LaunchRequest(BaseModel):
     provider_id: Optional[str] = Field(
         default=None,
-        description="Leave blank to auto-select the cheapest provider with uptime >= 98%.",
+        description="Leave blank to auto-select based on priority.",
     )
+    priority: Literal["high", "normal", "low"] = Field(
+        default="normal",
+        description="high=best uptime, normal=cheapest spot, low=cheapest spot.",
+    )
+
+
+class SpotPrice(BaseModel):
+    provider_id: str
+    spot_price: float
+    base_price: float
+    trend: Literal["up", "down", "flat"]
 
 
 class JobResponse(BaseModel):
@@ -28,9 +39,12 @@ class JobResponse(BaseModel):
     gpu_type: str
     region: str
     price_per_hour: float
+    base_price_per_hour: float
+    priority: Literal["high", "normal", "low"]
     status: Literal["queued", "running", "complete", "cancelled"]
     started_at: float
     cost_so_far: float
+    projected_cost: Optional[float]
 
 
 class LogsResponse(BaseModel):

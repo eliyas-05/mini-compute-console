@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from mock_data import PROVIDERS
+from spot_prices import get_spot_price, get_spot_prices
 
 _jobs: dict[str, dict] = {}
 
@@ -52,15 +53,26 @@ def _get_provider(provider_id: str) -> Optional[dict]:
     return next((p for p in PROVIDERS if p["id"] == provider_id), None)
 
 
-def _auto_pick_provider() -> Optional[dict]:
+def _auto_pick_provider(priority: str = "normal") -> Optional[dict]:
     candidates = [
         p for p in PROVIDERS
         if p["status"] == "available" and p["uptime_pct"] >= 98.0
     ]
-    return min(candidates, key=lambda p: p["price_per_hour"]) if candidates else None
+    if not candidates:
+        return None
+    # High priority: pick best uptime. Normal/low: pick cheapest spot price.
+    if priority == "high":
+        return max(candidates, key=lambda p: p["uptime_pct"])
+    spot = get_spot_prices() if priority == "normal" else None
+    if spot:
+        return min(candidates, key=lambda p: spot.get(p["id"], p["price_per_hour"]))
+    return min(candidates, key=lambda p: p["price_per_hour"])
 
 
-def launch_job(provider_id: Optional[str] = None) -> dict:
+_PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
+
+
+def launch_job(provider_id: Optional[str] = None, priority: str = "normal") -> dict:
     if provider_id:
         provider = _get_provider(provider_id)
         if not provider:
@@ -68,21 +80,28 @@ def launch_job(provider_id: Optional[str] = None) -> dict:
         if provider["status"] != "available":
             raise ValueError(f"Provider '{provider_id}' is not available")
     else:
-        provider = _auto_pick_provider()
+        provider = _auto_pick_provider(priority)
         if not provider:
             raise ValueError("No available providers meet reliability criteria (available + uptime >= 98%)")
 
+    if priority not in _PRIORITY_RANK:
+        raise ValueError(f"Invalid priority '{priority}'. Must be high, normal, or low.")
+
     now = time.time()
+    spot = get_spot_price(provider["id"])
     job = {
         "id": str(uuid.uuid4())[:8],
         "provider_id": provider["id"],
         "provider_name": provider["name"],
         "gpu_type": provider["gpu_type"],
         "region": provider["region"],
-        "price_per_hour": provider["price_per_hour"],
+        "price_per_hour": spot,
+        "base_price_per_hour": provider["price_per_hour"],
+        "priority": priority,
         "status": "queued",
         "started_at": now,
         "cost_so_far": 0.0,
+        "projected_cost": None,
         "_logs": [],
         "_last_log_tick": now,
     }
@@ -109,6 +128,12 @@ def get_job(job_id: str) -> Optional[dict]:
         job["status"] = "complete"
 
     job["cost_so_far"] = round(elapsed / 3600 * job["price_per_hour"], 6)
+
+    # Cost projection: estimated total at completion
+    if job["status"] in ("queued", "running"):
+        job["projected_cost"] = round(_JOB_DURATION_SECONDS / 3600 * job["price_per_hour"], 6)
+    elif job["status"] == "complete":
+        job["projected_cost"] = job["cost_so_far"]
 
     # Append one fake log line per poll while running (max once per 3 s)
     if job["status"] == "running" and now - job["_last_log_tick"] >= 3:
