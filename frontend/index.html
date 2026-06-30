@@ -16,6 +16,7 @@
     <div class="tagline" id="tagline-text">On-demand GPU power for AI workloads</div>
   </div>
   <div class="header-right">
+    <button class="kb-hint-btn" id="kb-hint-btn" title="Keyboard shortcuts (?)">⌨</button>
     <div class="rate-limit-wrap" id="rate-limit-wrap" title="API requests remaining this minute">
       <div class="rate-limit-label">API <span id="rate-remaining">—</span>/30</div>
       <div class="rate-limit-bar-bg">
@@ -82,15 +83,15 @@
 
     <!-- Templates panel -->
     <div class="section-title" style="margin-top:20px;display:flex;align-items:center;justify-content:space-between">
-      Job Templates
-      <button class="btn btn-sm" id="save-template-btn" style="font-size:10px;padding:3px 10px;background:rgba(255,255,255,0.07);color:var(--muted);border:1px solid rgba(255,255,255,0.1)">＋ Save</button>
+      <span style="display:flex;align-items:center;gap:6px"><span class="section-accent-bar"></span>Job Templates</span>
+      <button class="btn btn-sm" id="save-template-btn" style="font-size:10px;padding:3px 10px;background:rgba(255,255,255,0.07);color:var(--muted);border:1px solid rgba(255,255,255,0.1)">＋ Save current</button>
     </div>
     <div id="templates-list" class="templates-list">
       <span class="chart-empty">No templates saved yet.</span>
     </div>
 
     <!-- Provider table -->
-    <div class="section-title">GPU Providers</div>
+    <div class="section-title" style="margin-top:8px">GPU Providers</div>
     <table class="provider-table">
       <thead>
         <tr>
@@ -101,20 +102,38 @@
           <th>Spot</th>
           <th>Uptime</th>
           <th>Health</th>
+          <th>SLA</th>
           <th>Status</th>
           <th></th>
         </tr>
       </thead>
       <tbody id="provider-tbody">
-        <tr><td colspan="7" class="table-empty">Loading providers…</td></tr>
+        <tr><td colspan="10" class="table-empty">Loading providers…</td></tr>
       </tbody>
     </table>
 
-    <!-- Job history -->
-    <div class="section-title" style="margin-top:28px;display:flex;align-items:center;justify-content:space-between">
-      Job History
-      <button class="btn btn-sm" id="export-csv-btn" style="font-size:10px;padding:3px 10px;background:rgba(255,255,255,0.07);color:var(--muted);border:1px solid rgba(255,255,255,0.1)">⬇ Export CSV</button>
+    <!-- Job history with filter bar -->
+    <div class="section-title" style="margin-top:28px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <span style="display:flex;align-items:center;gap:6px"><span class="section-accent-bar"></span>Job History</span>
+      <div class="history-controls">
+        <input id="job-search" class="job-search" type="text" placeholder="Search provider…" />
+        <select id="filter-status" class="filter-select">
+          <option value="">All statuses</option>
+          <option value="queued">Queued</option>
+          <option value="running">Running</option>
+          <option value="complete">Complete</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <select id="filter-priority" class="filter-select">
+          <option value="">All priorities</option>
+          <option value="high">High</option>
+          <option value="normal">Normal</option>
+          <option value="low">Low</option>
+        </select>
+        <button class="btn btn-sm" id="export-csv-btn" style="font-size:10px;padding:3px 10px;background:rgba(255,255,255,0.07);color:var(--muted);border:1px solid rgba(255,255,255,0.1)">⬇ CSV</button>
+      </div>
     </div>
+    <div class="history-count" id="history-count"></div>
     <table class="provider-table">
       <thead>
         <tr>
@@ -129,7 +148,7 @@
         </tr>
       </thead>
       <tbody id="history-tbody">
-        <tr><td colspan="6" class="table-empty">No jobs yet.</td></tr>
+        <tr><td colspan="8" class="table-empty">No jobs yet.</td></tr>
       </tbody>
     </table>
   </div>
@@ -140,8 +159,14 @@
     <div>
       <div class="section-title">Active Job</div>
       <div class="card" id="job-panel">
-        <div class="no-job">No active job.<br>Launch one from the provider list.</div>
+        <div class="no-job">No active job.<br>Launch one from the provider list.<br><span class="kb-hint-inline">Press <kbd>L</kbd> to auto-launch</span></div>
       </div>
+    </div>
+
+    <!-- Forecast card (shown when job is running) -->
+    <div class="card" id="forecast-card" style="display:none">
+      <div class="section-title">Cost Forecast</div>
+      <div id="forecast-body"></div>
     </div>
 
     <!-- Spend chart -->
@@ -164,6 +189,27 @@
     </div>
   </aside>
 </main>
+
+<!-- Keyboard shortcuts overlay -->
+<div id="kb-overlay" class="kb-overlay" style="display:none">
+  <div class="kb-modal">
+    <div class="kb-modal-header">
+      <span>Keyboard Shortcuts</span>
+      <button class="kb-close" id="kb-close">✕</button>
+    </div>
+    <div class="kb-grid">
+      <div class="kb-row"><kbd>L</kbd><span>Auto-launch job</span></div>
+      <div class="kb-row"><kbd>1</kbd><span>Set priority: High</span></div>
+      <div class="kb-row"><kbd>2</kbd><span>Set priority: Normal</span></div>
+      <div class="kb-row"><kbd>3</kbd><span>Set priority: Low</span></div>
+      <div class="kb-row"><kbd>Esc</kbd><span>Cancel active job</span></div>
+      <div class="kb-row"><kbd>R</kbd><span>Refresh providers</span></div>
+      <div class="kb-row"><kbd>F</kbd><span>Focus job search</span></div>
+      <div class="kb-row"><kbd>/</kbd><span>Focus search (alt)</span></div>
+      <div class="kb-row"><kbd>?</kbd><span>Toggle this overlay</span></div>
+    </div>
+  </div>
+</div>
 
 <div id="toast"></div>
 <script src="app.js"></script>

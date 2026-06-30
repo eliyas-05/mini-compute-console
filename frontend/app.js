@@ -5,6 +5,7 @@ const JOB_DURATION_SECONDS = 90;
 let currentJobId = null;
 let activeSocket  = null;
 let apiKey = "demo-key-123";
+let _slaCache = {};
 
 // ── Brand ─────────────────────────────────────────────────────────────────────
 
@@ -20,7 +21,7 @@ async function loadBrand(brandName) {
     r.setProperty("--card",    b.card_color);
     r.setProperty("--text",    b.text_color);
     r.setProperty("--muted",   b.muted_color);
-    document.getElementById("logo-text").textContent   = b.logo_text;
+    document.getElementById("logo-text").textContent    = b.logo_text;
     document.getElementById("tagline-text").textContent = b.tagline;
     document.title = b.display_name;
     document.querySelectorAll(".brand-btn").forEach(btn =>
@@ -46,20 +47,22 @@ async function apiFetch(path, options = {}) {
   return res.json();
 }
 
-// ── Providers + Spot Prices ───────────────────────────────────────────────────
+// ── Providers + Spot Prices + SLA ─────────────────────────────────────────────
 
 let _spotCache   = {};
 let _healthCache = {};
 
 async function loadProviders() {
   try {
-    const [providers, spots, health] = await Promise.all([
+    const [providers, spots, health, slas] = await Promise.all([
       apiFetch("/providers"),
       apiFetch("/spot-prices"),
       apiFetch("/providers/health"),
+      apiFetch("/providers/sla"),
     ]);
     _spotCache   = Object.fromEntries(spots.map(s => [s.provider_id, s]));
     _healthCache = health;
+    _slaCache    = slas;
     renderProviders(providers);
   } catch (e) { showToast(`Failed to load providers: ${e.message}`, "error"); }
 }
@@ -80,6 +83,10 @@ function renderProviders(providers) {
     const grade       = hs ? hs.grade : "—";
     const gradeClass  = { A: "grade-a", B: "grade-b", C: "grade-c", D: "grade-d" }[grade] || "";
     const score       = hs ? hs.composite : "—";
+    const sla         = _slaCache[p.id];
+    const slaPct      = sla && sla.sla_pct != null ? `${sla.sla_pct.toFixed(1)}%` : "—";
+    const slaGrade    = sla ? sla.grade : "—";
+    const slaClass    = { A: "grade-a", B: "grade-b", C: "grade-c", D: "grade-d" }[slaGrade] || "";
 
     const tr = document.createElement("tr");
     tr.innerHTML = `
@@ -95,6 +102,10 @@ function renderProviders(providers) {
       <td>
         <span class="health-grade ${gradeClass}" title="Score: ${score}">${grade}</span>
         <span class="muted-text" style="font-size:10px"> ${score}</span>
+      </td>
+      <td>
+        <span class="health-grade ${slaClass}" title="5-min SLA: ${slaPct}">${slaGrade}</span>
+        <span class="muted-text" style="font-size:10px"> ${slaPct}</span>
       </td>
       <td><span class="status-dot ${dotClass}"></span>${p.status}</td>
       <td>
@@ -112,14 +123,14 @@ function getSelectedPriority() {
 }
 
 async function launchJob(providerId, templateId) {
-  const priority = getSelectedPriority();
-  const budgetRaw = document.getElementById("budget-input")?.value;
+  const priority   = getSelectedPriority();
+  const budgetRaw  = document.getElementById("budget-input")?.value;
   const budgetLimit = budgetRaw ? parseFloat(budgetRaw) : null;
   const body = {
     priority,
-    ...(providerId   ? { provider_id: providerId }   : {}),
-    ...(templateId   ? { template_id: templateId }   : {}),
-    ...(budgetLimit  ? { budget_limit: budgetLimit }  : {}),
+    ...(providerId  ? { provider_id: providerId }  : {}),
+    ...(templateId  ? { template_id: templateId }  : {}),
+    ...(budgetLimit ? { budget_limit: budgetLimit } : {}),
   };
   try {
     const job = await apiFetch("/jobs", { method: "POST", body: JSON.stringify(body) });
@@ -130,6 +141,7 @@ async function launchJob(providerId, templateId) {
     refreshHistory();
     refreshAnalytics();
     refreshAuditLog();
+    scheduleForecastPoll(job.job_id);
   } catch (e) { showToast(`Launch failed: ${e.message}`, "error"); }
 }
 
@@ -141,6 +153,7 @@ async function cancelJob(jobId) {
     showToast(`Job ${jobId} cancelled`, "");
     renderJobCard(job, job._logs || []);
     if (activeSocket) { activeSocket.close(); activeSocket = null; }
+    document.getElementById("forecast-card").style.display = "none";
     refreshHistory();
     refreshAnalytics();
   } catch (e) { showToast(`Cancel failed: ${e.message}`, "error"); }
@@ -172,6 +185,7 @@ function openWebSocket(jobId) {
         renderJobCard(job, null);
         refreshHistory();
         refreshAnalytics();
+        document.getElementById("forecast-card").style.display = "none";
       });
       if (msg.retry_count > 0)
         showToast(`Job re-routed ${msg.retry_count}× due to provider availability`, "");
@@ -201,14 +215,13 @@ function appendLogLine(line) {
 // ── GPU sparkline ─────────────────────────────────────────────────────────────
 
 function updateGpuSparkline(samples, currentUtil) {
-  const el = document.getElementById("gpu-sparkline");
+  const el     = document.getElementById("gpu-sparkline");
   const utilEl = document.getElementById("gpu-util-pct");
   if (!el) return;
   if (utilEl) utilEl.textContent = `${currentUtil}%`;
   if (!samples.length) return;
 
-  const W = 80, H = 24;
-  const max = 100, min = 80;
+  const W = 80, H = 24, max = 100, min = 80;
   const pts = samples.map((v, i) => {
     const x = (i / (samples.length - 1 || 1)) * W;
     const y = H - ((v - min) / (max - min)) * H;
@@ -223,15 +236,12 @@ function updateGpuSparkline(samples, currentUtil) {
 async function refreshRateLimit() {
   try {
     const info = await apiFetch("/rate-limit");
-    const remaining = info.remaining;
-    const pct = (remaining / info.limit) * 100;
-    const el = document.getElementById("rate-remaining");
-    const bar = document.getElementById("rate-bar");
-    if (el) el.textContent = remaining;
-    if (bar) {
-      bar.style.width = `${pct}%`;
-      bar.style.background = pct > 50 ? "var(--success)" : pct > 20 ? "var(--warn)" : "var(--danger)";
-    }
+    const pct  = (info.remaining / info.limit) * 100;
+    const el   = document.getElementById("rate-remaining");
+    const bar  = document.getElementById("rate-bar");
+    if (el)  el.textContent    = info.remaining;
+    if (bar) bar.style.width   = `${pct}%`;
+    if (bar) bar.style.background = pct > 50 ? "var(--success)" : pct > 20 ? "var(--warn)" : "var(--danger)";
   } catch { /* silent */ }
 }
 
@@ -241,16 +251,16 @@ async function exportCSV() {
   try {
     const jobs = await apiFetch("/jobs");
     if (!jobs.length) { showToast("No jobs to export", ""); return; }
-    const headers = ["job_id","provider_id","provider_name","gpu_type","region","priority","status","price_per_hour","cost_so_far","projected_cost","retry_count","started_at"];
-    const rows = jobs.map(j => headers.map(h => {
+    const cols = ["job_id","provider_id","provider_name","gpu_type","region","priority","status","price_per_hour","cost_so_far","projected_cost","budget_limit","retry_count","owner","started_at"];
+    const rows = jobs.map(j => cols.map(h => {
       const v = j[h] ?? "";
       return typeof v === "string" && v.includes(",") ? `"${v}"` : v;
     }).join(","));
-    const csv = [headers.join(","), ...rows].join("\n");
+    const csv  = [cols.join(","), ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
-    a.href = url; a.download = `jobs-${Date.now()}.csv`;
+    a.href = url; a.download = `voltgrid-jobs-${Date.now()}.csv`;
     a.click(); URL.revokeObjectURL(url);
     showToast(`Exported ${jobs.length} jobs`, "success");
   } catch (e) { showToast(`Export failed: ${e.message}`, "error"); }
@@ -259,11 +269,11 @@ async function exportCSV() {
 // ── Job card ──────────────────────────────────────────────────────────────────
 
 function renderJobCard(job, logs) {
-  const panel = document.getElementById("job-panel");
-  const elapsed = job.cost_so_far / job.price_per_hour * 3600;
-  const progress = Math.min((elapsed / JOB_DURATION_SECONDS) * 100, 100);
+  const panel      = document.getElementById("job-panel");
+  const elapsed    = job.cost_so_far / job.price_per_hour * 3600;
+  const progress   = Math.min((elapsed / JOB_DURATION_SECONDS) * 100, 100);
   const badgeClass = { queued: "badge-queued", running: "badge-running", complete: "badge-complete", cancelled: "badge-cancelled" }[job.status] || "badge-queued";
-  const cancelBtn = (job.status === "queued" || job.status === "running")
+  const cancelBtn  = (job.status === "queued" || job.status === "running")
     ? `<button class="btn btn-danger btn-sm" onclick="cancelJob('${job.job_id}')">✕ Cancel</button>`
     : "";
 
@@ -273,7 +283,10 @@ function renderJobCard(job, logs) {
         <div class="job-id">JOB-${job.job_id.toUpperCase()}</div>
         <div class="job-provider">${job.provider_name}</div>
         <div class="job-detail">${job.gpu_type} · ${job.region}</div>
-        <div style="margin-top:4px"><span class="priority-chip ${job.priority}">${job.priority}</span></div>
+        <div style="margin-top:4px;display:flex;align-items:center;gap:6px">
+          <span class="priority-chip ${job.priority}">${job.priority}</span>
+          <span class="owner-chip">👤 ${job.owner}</span>
+        </div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
         <span class="job-status-badge ${badgeClass}">${job.status}</span>
@@ -299,7 +312,7 @@ function renderJobCard(job, logs) {
     </div>
 
     ${job.budget_limit != null ? (() => {
-      const pct = job.budget_pct_used ?? 0;
+      const pct       = job.budget_pct_used ?? 0;
       const fillClass = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "";
       return `<div class="budget-bar-wrap">
         <div class="budget-bar-label">
@@ -334,10 +347,7 @@ function renderJobCard(job, logs) {
       }
     </div>`;
 
-  // Tick the cost display locally while running
-  if (job.status === "running") {
-    startCostTicker(job.price_per_hour, job.cost_so_far);
-  }
+  if (job.status === "running") startCostTicker(job.price_per_hour, job.cost_so_far);
 }
 
 let _tickerInterval = null;
@@ -347,43 +357,149 @@ function startCostTicker(pricePerHour, startCost) {
   _tickerInterval = setInterval(() => {
     const el = document.getElementById("cost-ticker");
     if (!el) { clearInterval(_tickerInterval); return; }
-    const secondsElapsed = (Date.now() - startTime) / 1000;
-    const cost = startCost + (secondsElapsed / 3600) * pricePerHour;
-    el.textContent = `$${cost.toFixed(4)}`;
+    const secs = (Date.now() - startTime) / 1000;
+    el.textContent = `$${(startCost + (secs / 3600) * pricePerHour).toFixed(4)}`;
   }, 500);
 }
 
-// ── Job history ───────────────────────────────────────────────────────────────
+// ── Forecast panel ────────────────────────────────────────────────────────────
+
+let _forecastInterval = null;
+
+function scheduleForecastPoll(jobId) {
+  if (_forecastInterval) clearInterval(_forecastInterval);
+  refreshForecast(jobId);
+  _forecastInterval = setInterval(async () => {
+    const job = await apiFetch(`/jobs/${jobId}`).catch(() => null);
+    if (!job || job.status === "complete" || job.status === "cancelled") {
+      clearInterval(_forecastInterval);
+      document.getElementById("forecast-card").style.display = "none";
+      return;
+    }
+    refreshForecast(jobId);
+  }, 5000);
+}
+
+async function refreshForecast(jobId) {
+  try {
+    const f   = await apiFetch(`/jobs/${jobId}/forecast`);
+    const card = document.getElementById("forecast-card");
+    const body = document.getElementById("forecast-body");
+    card.style.display = "";
+
+    const breachPct  = (f.budget_breach_prob * 100).toFixed(0);
+    const breachColor = f.budget_breach_prob >= 0.8 ? "var(--danger)" : f.budget_breach_prob >= 0.4 ? "var(--warn)" : "var(--success)";
+    const etaMins    = (f.eta_seconds / 60).toFixed(1);
+    const savings    = f.savings_vs_base;
+
+    body.innerHTML = `
+      <div class="forecast-grid">
+        <div class="forecast-stat">
+          <div class="forecast-val">$${f.estimated_final_cost.toFixed(4)}</div>
+          <div class="forecast-lbl">Estimated Final</div>
+        </div>
+        <div class="forecast-stat">
+          <div class="forecast-val">${etaMins}m</div>
+          <div class="forecast-lbl">ETA</div>
+        </div>
+        <div class="forecast-stat">
+          <div class="forecast-val">$${f.burn_rate_per_hour.toFixed(2)}/hr</div>
+          <div class="forecast-lbl">Burn Rate</div>
+        </div>
+        <div class="forecast-stat">
+          <div class="forecast-val" style="color:${savings >= 0 ? 'var(--success)' : 'var(--danger)'}">
+            ${savings >= 0 ? "-" : "+"}$${Math.abs(savings).toFixed(4)}
+          </div>
+          <div class="forecast-lbl">vs Base Price</div>
+        </div>
+      </div>
+      ${f.budget_limit ? `
+      <div class="forecast-breach">
+        <div class="forecast-breach-label">
+          <span>Budget breach risk</span>
+          <span style="color:${breachColor};font-weight:700">${breachPct}%</span>
+        </div>
+        <div class="budget-bar-bg">
+          <div class="budget-bar-fill ${f.budget_breach_prob >= 0.8 ? 'danger' : f.budget_breach_prob >= 0.4 ? 'warn' : ''}"
+               style="width:${breachPct}%"></div>
+        </div>
+        ${f.over_budget_by ? `<div style="font-size:10px;color:var(--danger);margin-top:4px">Over by $${f.over_budget_by.toFixed(4)} if run to completion</div>` : ""}
+      </div>` : ""}`;
+  } catch { /* job may have ended */ }
+}
+
+// ── Job history with filter ───────────────────────────────────────────────────
+
+let _allJobs = [];
 
 async function refreshHistory() {
   try {
-    const jobs = await apiFetch("/jobs");
-    renderHistory(jobs);
-  } catch (e) { /* silent */ }
+    _allJobs = await apiFetch("/jobs");
+    applyHistoryFilter();
+  } catch { /* silent */ }
+}
+
+function applyHistoryFilter() {
+  const search   = document.getElementById("job-search")?.value.toLowerCase() || "";
+  const status   = document.getElementById("filter-status")?.value || "";
+  const priority = document.getElementById("filter-priority")?.value || "";
+  const countEl  = document.getElementById("history-count");
+
+  let filtered = [..._allJobs].reverse();
+  if (search)   filtered = filtered.filter(j => j.provider_name.toLowerCase().includes(search) || j.job_id.includes(search));
+  if (status)   filtered = filtered.filter(j => j.status === status);
+  if (priority) filtered = filtered.filter(j => j.priority === priority);
+
+  if (countEl) {
+    countEl.textContent = filtered.length < _allJobs.length
+      ? `Showing ${filtered.length} of ${_allJobs.length} jobs`
+      : "";
+  }
+
+  renderHistory(filtered);
 }
 
 function renderHistory(jobs) {
   const tbody = document.getElementById("history-tbody");
   if (!jobs.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No jobs yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No jobs match your filter.</td></tr>';
     return;
   }
-  tbody.innerHTML = [...jobs].reverse().map(j => {
+  tbody.innerHTML = jobs.map(j => {
     const badgeClass = { queued: "badge-queued", running: "badge-running", complete: "badge-complete", cancelled: "badge-cancelled" }[j.status] || "badge-queued";
-    const cancelBtn = (j.status === "queued" || j.status === "running")
+    const cancelBtn  = (j.status === "queued" || j.status === "running")
       ? `<button class="btn btn-danger btn-sm" onclick="cancelJob('${j.job_id}')">✕</button>`
       : "—";
-    return `<tr>
+    const budgetCol  = j.budget_limit ? `<span class="budget-chip">$${j.budget_limit.toFixed(2)}</span>` : "";
+    return `<tr class="${j.job_id === currentJobId ? 'row-active' : ''}" onclick="selectJobFromHistory('${j.job_id}')" style="cursor:pointer">
       <td><span class="mono">${j.job_id}</span></td>
-      <td>${j.provider_name}</td>
+      <td>${j.provider_name}${budgetCol}</td>
       <td><span class="gpu-badge">${j.gpu_type}</span></td>
       <td><span class="priority-chip ${j.priority}">${j.priority}</span></td>
       <td><span class="job-status-badge ${badgeClass}">${j.status}</span></td>
       <td class="price">$${j.cost_so_far.toFixed(4)}</td>
       <td class="muted-text" style="text-align:center">${j.retry_count || 0}</td>
-      <td>${cancelBtn}</td>
+      <td onclick="event.stopPropagation()">${cancelBtn}</td>
     </tr>`;
   }).join("");
+}
+
+async function selectJobFromHistory(jobId) {
+  try {
+    const job = await apiFetch(`/jobs/${jobId}`);
+    currentJobId = jobId;
+    renderJobCard(job, null);
+    applyHistoryFilter();
+    if (job.status === "running") {
+      openWebSocket(jobId);
+      scheduleForecastPoll(jobId);
+    } else {
+      document.getElementById("forecast-card").style.display = "none";
+    }
+    const logs = await apiFetch(`/jobs/${jobId}/logs`);
+    const box  = document.getElementById("log-box");
+    if (box) box.innerHTML = logs.logs.map(l => `<div class="log-line">${escapeHtml(l)}</div>`).join("") || '<span class="log-empty">No logs.</span>';
+  } catch (e) { showToast(`Could not load job: ${e.message}`, "error"); }
 }
 
 // ── Analytics ─────────────────────────────────────────────────────────────────
@@ -391,38 +507,35 @@ function renderHistory(jobs) {
 async function refreshAnalytics() {
   try {
     const a = await apiFetch("/analytics");
-    document.getElementById("m-total-jobs").textContent  = a.total_jobs;
-    document.getElementById("m-running").textContent     = a.running_jobs;
-    document.getElementById("m-completed").textContent   = a.completed_jobs;
-    document.getElementById("m-spend").textContent       = `$${a.total_spend.toFixed(4)}`;
-    document.getElementById("m-avg-cost").textContent    = `$${a.avg_cost_per_job.toFixed(4)}`;
+    document.getElementById("m-total-jobs").textContent   = a.total_jobs;
+    document.getElementById("m-running").textContent      = a.running_jobs;
+    document.getElementById("m-completed").textContent    = a.completed_jobs;
+    document.getElementById("m-spend").textContent        = `$${a.total_spend.toFixed(4)}`;
+    document.getElementById("m-avg-cost").textContent     = `$${a.avg_cost_per_job.toFixed(4)}`;
     document.getElementById("m-top-provider").textContent =
       a.most_used_provider ? a.most_used_provider.split("·")[0].trim() : "—";
     renderSpendChart(a.provider_breakdown);
-  } catch (e) { /* silent */ }
+  } catch { /* silent */ }
 }
 
 // ── Spend bar chart ───────────────────────────────────────────────────────────
 
 function renderSpendChart(breakdown) {
   const container = document.getElementById("spend-chart");
-  const entries = Object.entries(breakdown).sort((a, b) => b[1].total_spend - a[1].total_spend);
+  const entries   = Object.entries(breakdown).sort((a, b) => b[1].total_spend - a[1].total_spend);
   if (!entries.length) {
     container.innerHTML = '<span class="chart-empty">Launch jobs to see spend breakdown.</span>';
     return;
   }
   const max = Math.max(...entries.map(([, v]) => v.total_spend), 0.0001);
   container.innerHTML = entries.map(([pid, stats]) => {
-    const pct = (stats.total_spend / max) * 100;
+    const pct   = (stats.total_spend / max) * 100;
     const label = pid.split("-").slice(0, 2).join("-");
-    return `
-      <div class="chart-row">
-        <div class="chart-label" title="${pid}">${label}</div>
-        <div class="chart-bar-wrap">
-          <div class="chart-bar" style="width:${pct}%"></div>
-        </div>
-        <div class="chart-value">$${stats.total_spend.toFixed(4)}</div>
-      </div>`;
+    return `<div class="chart-row">
+      <div class="chart-label" title="${pid}">${label}</div>
+      <div class="chart-bar-wrap"><div class="chart-bar" style="width:${pct}%"></div></div>
+      <div class="chart-value">$${stats.total_spend.toFixed(4)}</div>
+    </div>`;
   }).join("");
 }
 
@@ -436,7 +549,7 @@ async function refreshAuditLog() {
   }
   try {
     const entries = await apiFetch("/admin/audit");
-    const card = document.getElementById("audit-card");
+    const card    = document.getElementById("audit-card");
     card.style.display = "";
     const list = document.getElementById("audit-list");
     if (!entries.length) {
@@ -450,9 +563,7 @@ async function refreshAuditLog() {
           <span class="audit-action audit-action-${e.action}">${e.action}</span>
           <span class="audit-ts">${new Date(e.timestamp).toLocaleTimeString()}</span>
         </div>
-        <div class="audit-detail">
-          <span class="audit-user">${e.user}</span> → ${e.provider_id}
-        </div>
+        <div class="audit-detail"><span class="audit-user">${e.user}</span> → ${e.provider_id}</div>
       </div>`).join("");
   } catch { document.getElementById("audit-card").style.display = "none"; }
 }
@@ -463,18 +574,15 @@ let _toastTimer = null;
 function showToast(msg, type = "") {
   const t = document.getElementById("toast");
   t.textContent = msg;
-  t.className = `show ${type}`;
+  t.className   = `show ${type}`;
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => { t.className = ""; }, 3500);
 }
 
-// ── Templates ────────────────────────────────────────────────────────────────
+// ── Templates ─────────────────────────────────────────────────────────────────
 
 async function loadTemplates() {
-  try {
-    const templates = await apiFetch("/templates");
-    renderTemplates(templates);
-  } catch { /* silent */ }
+  try { renderTemplates(await apiFetch("/templates")); } catch { /* silent */ }
 }
 
 function renderTemplates(templates) {
@@ -505,14 +613,11 @@ function renderTemplates(templates) {
 async function saveCurrentAsTemplate() {
   const name = prompt("Template name:");
   if (!name) return;
-  const priority = getSelectedPriority();
-  const budgetRaw = document.getElementById("budget-input")?.value;
+  const priority    = getSelectedPriority();
+  const budgetRaw   = document.getElementById("budget-input")?.value;
   const budget_limit = budgetRaw ? parseFloat(budgetRaw) : null;
   try {
-    await apiFetch("/templates", {
-      method: "POST",
-      body: JSON.stringify({ name, priority, budget_limit }),
-    });
+    await apiFetch("/templates", { method: "POST", body: JSON.stringify({ name, priority, budget_limit }) });
     showToast(`Template "${name}" saved`, "success");
     loadTemplates();
   } catch (e) { showToast(`Save failed: ${e.message}`, "error"); }
@@ -521,13 +626,70 @@ async function saveCurrentAsTemplate() {
 async function deleteTemplate(templateId) {
   try {
     const key = document.getElementById("api-key-input").value.trim() || apiKey;
-    await fetch(`${API_BASE}/templates/${templateId}`, {
-      method: "DELETE",
-      headers: { "X-API-Key": key },
-    });
+    await fetch(`${API_BASE}/templates/${templateId}`, { method: "DELETE", headers: { "X-API-Key": key } });
     showToast("Template deleted", "");
     loadTemplates();
   } catch (e) { showToast(`Delete failed: ${e.message}`, "error"); }
+}
+
+// ── Keyboard shortcuts ────────────────────────────────────────────────────────
+
+function toggleKbOverlay(force) {
+  const overlay = document.getElementById("kb-overlay");
+  const show    = force !== undefined ? force : overlay.style.display === "none";
+  overlay.style.display = show ? "flex" : "none";
+}
+
+function initKeyboardShortcuts() {
+  document.addEventListener("keydown", (e) => {
+    const tag = document.activeElement?.tagName.toLowerCase();
+    if (tag === "input" || tag === "select" || tag === "textarea") return;
+
+    switch (e.key) {
+      case "l": case "L":
+        e.preventDefault();
+        launchJob(null);
+        showToast("Auto-launching job…", "");
+        break;
+      case "1":
+        document.querySelector('input[name="priority"][value="high"]').checked = true;
+        showToast("Priority → High", "");
+        break;
+      case "2":
+        document.querySelector('input[name="priority"][value="normal"]').checked = true;
+        showToast("Priority → Normal", "");
+        break;
+      case "3":
+        document.querySelector('input[name="priority"][value="low"]').checked = true;
+        showToast("Priority → Low", "");
+        break;
+      case "Escape":
+        if (document.getElementById("kb-overlay").style.display !== "none") {
+          toggleKbOverlay(false);
+        } else if (currentJobId) {
+          cancelJob(currentJobId);
+        }
+        break;
+      case "r": case "R":
+        e.preventDefault();
+        loadProviders();
+        showToast("Refreshing providers…", "");
+        break;
+      case "f": case "F": case "/":
+        e.preventDefault();
+        document.getElementById("job-search")?.focus();
+        break;
+      case "?":
+        toggleKbOverlay();
+        break;
+    }
+  });
+
+  document.getElementById("kb-hint-btn").addEventListener("click", () => toggleKbOverlay());
+  document.getElementById("kb-close").addEventListener("click", () => toggleKbOverlay(false));
+  document.getElementById("kb-overlay").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) toggleKbOverlay(false);
+  });
 }
 
 // ── Util ──────────────────────────────────────────────────────────────────────
@@ -548,22 +710,26 @@ document.addEventListener("DOMContentLoaded", () => {
   const keyInput = document.getElementById("api-key-input");
   keyInput.value = apiKey;
   keyInput.addEventListener("change", () => {
-    loadProviders();
-    refreshHistory();
-    refreshAnalytics();
-    refreshAuditLog();
+    loadProviders(); refreshHistory(); refreshAnalytics(); refreshAuditLog(); loadTemplates();
   });
 
   document.getElementById("auto-pick-btn").addEventListener("click", () => launchJob(null));
   document.getElementById("export-csv-btn").addEventListener("click", exportCSV);
   document.getElementById("save-template-btn").addEventListener("click", saveCurrentAsTemplate);
 
+  // Filter inputs
+  document.getElementById("job-search").addEventListener("input",    applyHistoryFilter);
+  document.getElementById("filter-status").addEventListener("change", applyHistoryFilter);
+  document.getElementById("filter-priority").addEventListener("change", applyHistoryFilter);
+
+  initKeyboardShortcuts();
+
   loadProviders();
   refreshAnalytics();
+  refreshHistory();
   refreshRateLimit();
   loadTemplates();
 
-  // Refresh providers + analytics every 15s, rate limit every 5s
   setInterval(() => { loadProviders(); refreshAnalytics(); refreshHistory(); }, 15000);
   setInterval(refreshRateLimit, 5000);
 });
