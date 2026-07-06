@@ -25,14 +25,25 @@ def test_auto_pick_selects_available_provider():
     assert provider["uptime_pct"] >= 98.0
 
 
-def test_auto_pick_selects_cheapest():
-    job = launch_job()
-    candidates = [
-        p for p in PROVIDERS
-        if p["status"] == "available" and p["uptime_pct"] >= 98.0
-    ]
+def test_auto_pick_normal_selects_available_provider():
+    # normal priority picks cheapest spot price, which varies; just assert a valid pick
+    job = launch_job(priority="normal")
+    candidates = [p for p in PROVIDERS if p["status"] == "available" and p["uptime_pct"] >= 98.0]
+    assert any(job["provider_id"] == p["id"] for p in candidates)
+
+
+def test_auto_pick_low_selects_cheapest_base():
+    job = launch_job(priority="low")
+    candidates = [p for p in PROVIDERS if p["status"] == "available" and p["uptime_pct"] >= 98.0]
     cheapest = min(candidates, key=lambda p: p["price_per_hour"])
     assert job["provider_id"] == cheapest["id"]
+
+
+def test_auto_pick_high_selects_best_uptime():
+    job = launch_job(priority="high")
+    candidates = [p for p in PROVIDERS if p["status"] == "available" and p["uptime_pct"] >= 98.0]
+    best_uptime = max(candidates, key=lambda p: p["uptime_pct"])
+    assert job["provider_id"] == best_uptime["id"]
 
 
 def test_launch_specific_provider():
