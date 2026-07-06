@@ -348,6 +348,8 @@ function renderJobCard(job, logs) {
     </div>`;
 
   if (job.status === "running") startCostTicker(job.price_per_hour, job.cost_so_far);
+  if (job.status === "complete") loadJobReport(job.job_id);
+  else document.getElementById("report-card").style.display = "none";
 }
 
 let _tickerInterval = null;
@@ -360,6 +362,49 @@ function startCostTicker(pricePerHour, startCost) {
     const secs = (Date.now() - startTime) / 1000;
     el.textContent = `$${(startCost + (secs / 3600) * pricePerHour).toFixed(4)}`;
   }, 500);
+}
+
+// ── Efficiency report panel ───────────────────────────────────────────────────
+
+async function loadJobReport(jobId) {
+  try {
+    const r    = await apiFetch(`/jobs/${jobId}/report`);
+    const card = document.getElementById("report-card");
+    const body = document.getElementById("report-body");
+    card.style.display = "";
+
+    const gradeColor = { A: "var(--success)", B: "var(--accent)", C: "var(--warn)", D: "var(--danger)" };
+    const gc = gradeColor[r.efficiency_grade] || "var(--muted)";
+    const util = r.gpu_util || {};
+
+    body.innerHTML = `
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px">
+        <div style="font-size:42px;font-weight:800;color:${gc};font-family:'JetBrains Mono',monospace;line-height:1">
+          ${r.efficiency_score}
+        </div>
+        <div>
+          <div style="font-size:22px;font-weight:700;color:${gc}">${r.efficiency_grade}</div>
+          <div style="font-size:11px;color:var(--muted)">Efficiency score / 100</div>
+        </div>
+      </div>
+      <div class="forecast-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+        <div class="forecast-stat">
+          <div class="forecast-val">${util.avg != null ? util.avg.toFixed(1) : "—"}%</div>
+          <div class="forecast-lbl">Avg GPU Util</div>
+        </div>
+        <div class="forecast-stat">
+          <div class="forecast-val">${util.peak != null ? util.peak.toFixed(1) : "—"}%</div>
+          <div class="forecast-lbl">Peak Util</div>
+        </div>
+        <div class="forecast-stat">
+          <div class="forecast-val">${r.wasted_capacity_pct != null ? r.wasted_capacity_pct.toFixed(1) : "—"}%</div>
+          <div class="forecast-lbl">Wasted Capacity</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:6px;border-left:2px solid ${gc}">
+        ${escapeHtml(r.recommendation || "No recommendation.")}
+      </div>`;
+  } catch { /* job may not be done yet */ }
 }
 
 // ── Forecast panel ────────────────────────────────────────────────────────────
@@ -496,6 +541,7 @@ async function selectJobFromHistory(jobId) {
     } else {
       document.getElementById("forecast-card").style.display = "none";
     }
+    if (job.status === "complete") loadJobReport(jobId);
     const logs = await apiFetch(`/jobs/${jobId}/logs`);
     const box  = document.getElementById("log-box");
     if (box) box.innerHTML = logs.logs.map(l => `<div class="log-line">${escapeHtml(l)}</div>`).join("") || '<span class="log-empty">No logs.</span>';
