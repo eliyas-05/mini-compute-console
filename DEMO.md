@@ -52,17 +52,26 @@ After ~90 seconds the status flips to **COMPLETE**. The **Efficiency Report** pa
 - Avg GPU util, peak util, wasted capacity %
 - Plain-English recommendation (e.g. "A cheaper provider was available — try normal priority")
 
-### 5. Clone and replay
+### 5. Register a webhook
+```bash
+curl -X POST http://localhost:8000/webhooks \
+  -H "X-API-Key: demo-key-123" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://webhook.site/your-id","events":["job_complete","job_cancelled"]}'
+```
+When the next job finishes, the engine fires an HTTP POST to that URL with the job result. Each webhook records its last 50 delivery attempts — check them with `GET /webhooks/{id}`.
+
+### 6. Clone and replay
 In the job card (or history table row), click the row to reload it, then call:
 ```
 POST /jobs/{id}/clone
 ```
 The engine replays the same provider and priority — useful for benchmarking reproducibility.
 
-### 6. Switch to admin key to see the audit log
+### 7. Switch to admin key to see the audit log
 Change the API key input to `admin-key-456`. The **Audit Log** panel appears in the sidebar showing every job launch with timestamp, user, and provider.
 
-### 7. Try the keyboard shortcuts
+### 8. Try the keyboard shortcuts
 Press `?` to open the shortcut overlay:
 - `L` — auto-launch a job
 - `1` / `2` / `3` — switch priority (High / Normal / Low)
@@ -70,16 +79,16 @@ Press `?` to open the shortcut overlay:
 - `R` — refresh providers
 - `F` — focus job search
 
-### 8. Toggle light mode
+### 9. Toggle light mode
 Click `☀` in the top-right corner. All CSS custom properties swap via a `body.light` class toggle — no page reload, preference saved to localStorage.
 
-### 9. Check the Prometheus scrape endpoint
+### 10. Check the Prometheus scrape endpoint
 ```bash
 curl http://localhost:8000/metrics
 ```
 Returns a valid Prometheus text/plain payload. Drop a Grafana stack in front and you have a real dashboard.
 
-### 10. Multi-tenant isolation
+### 11. Multi-tenant isolation
 ```bash
 # Launch a job as tenant-user
 curl -X POST http://localhost:8000/jobs \
@@ -109,5 +118,5 @@ FastAPI auto-generates interactive docs at **http://localhost:8000/docs** — ev
 ```bash
 pip install pytest httpx
 pytest tests/ -v
-# 64 tests · ~0.2s · zero disk side effects (uses temp DB)
+# 75 tests · ~0.2s · zero disk side effects (uses temp DB)
 ```

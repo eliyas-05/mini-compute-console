@@ -85,11 +85,19 @@ Pass `budget_limit` on launch. `check_budget()` is called on every poll — no b
 ### Prometheus metrics
 `GET /metrics` returns a Prometheus text/plain scrape payload (no auth, standard convention). Exposes job counts by status, total spend, avg GPU util, spot prices per provider, SLA%, and rate-limit usage per key.
 
+### Webhook notifications
+`POST /webhooks` registers a callback URL for job lifecycle events. When a job completes or is cancelled, the engine fires an authenticated HTTP POST to every matching webhook for that owner:
+```json
+{ "type": "job_complete", "job_id": "a1b2c3d4", "provider": "runpod-a100", "cost": 0.0412 }
+```
+Webhook delivery is non-blocking (asyncio background task). Each webhook records its last 50 delivery attempts with status codes. The `secret` field is forwarded as `X-Hook-Secret` for HMAC verification.
+
 ### Other
 - **Job templates** — save/recall launch configs (provider, priority, budget)
 - **Job clone** — `POST /jobs/{id}/clone` replays a job with the same settings
 - **Paginated `GET /jobs`** — `?page=1&limit=20`, with `X-Total-Count`/`X-Total-Pages` response headers
-- **Rate limiting** — 30 req/min per API key, in-memory sliding window
+- **Rate limiting** — 30 req/min per API key, sliding window; `X-RateLimit-Remaining` on every response
+- **Request tracing** — `X-Request-ID` on every response (client-supplied or auto-generated UUID)
 - **Structured JSON logging** — every action emits `{"ts":…,"level":…,"event":…}` to stdout
 - **Multi-brand theming** — `/brand/voltgrid` or `/brand/partnera` applies colors + tagline via CSS custom properties
 - **Light/dark mode** — toggle with `☀` button, preference persisted to localStorage
@@ -125,6 +133,10 @@ Pass `budget_limit` on launch. `check_budget()` is called on every poll — no b
 | `GET` | `/metrics` | ❌ | Prometheus scrape endpoint |
 | `GET` | `/system/info` | ✅ | Version, WS subscriber count, provider stats |
 | `GET` | `/brand/{name}` | ❌ | Brand config (colors, logo, tagline) |
+| `POST` | `/webhooks` | ✅ | Register callback URL for job events |
+| `GET` | `/webhooks` | ✅ | List webhooks (scoped to API key) |
+| `GET` | `/webhooks/{id}` | ✅ | Get webhook + delivery log |
+| `DELETE` | `/webhooks/{id}` | ✅ | Delete webhook |
 | `WS` | `/ws/jobs/{id}/logs` | — | Per-job log + GPU util stream |
 | `WS` | `/ws/events` | — | Global job state broadcast |
 | `GET` | `/health` | ❌ | `{"status":"ok"}` |
@@ -164,6 +176,7 @@ mini-compute-console/
 │   ├── templates.py      # Job template CRUD
 │   ├── analytics.py      # Aggregate spend + usage stats
 │   ├── audit_log.py      # Immutable action log
+│   ├── webhooks.py       # Webhook registry + async delivery
 │   ├── logger.py         # Structured JSON logging to stdout
 │   ├── mock_data.py      # 8 GPU providers
 │   └── requirements.txt
@@ -174,8 +187,8 @@ mini-compute-console/
 │   └── brands/           # JSON brand configs
 ├── tests/
 │   ├── conftest.py       # TestClient fixtures + autouse reset
-│   ├── test_api.py       # 62 integration tests
-│   └── test_job_engine.py
+│   ├── test_api.py       # 64 integration tests
+│   └── test_job_engine.py  # 11 unit tests
 ├── ARCHITECTURE.md       # System diagram + design decisions
 ├── Dockerfile
 ├── docker-compose.yml
@@ -194,7 +207,7 @@ mini-compute-console/
 
 **404 not 403 on cross-tenant access** — leaking job existence to another tenant is itself a security issue. Every tenant-scoped route returns 404 if the job belongs to a different owner.
 
-**62 integration tests, isolated with `autouse` fixture** — `_jobs.clear()` runs before and after every test, making test order irrelevant and eliminating state bleed across the full suite.
+**75 integration tests, isolated with `autouse` fixture** — `_jobs.clear()`, `_webhooks.clear()`, and `_rate_counters.clear()` run before and after every test, making test order irrelevant and eliminating state bleed across the full suite.
 
 ---
 

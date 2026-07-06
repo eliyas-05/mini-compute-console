@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import uuid
 
 from fastapi import FastAPI, Depends, HTTPException, Header, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,7 @@ from mock_data import PROVIDERS
 from models import LaunchRequest, JobResponse, LogsResponse, AnalyticsResponse, TemplateRequest, TemplateResponse
 from spot_prices import get_spot_prices, price_trend
 from templates import create_template, get_all_templates, get_one_template, remove_template
+from webhooks import register_webhook, list_webhooks, get_webhook, delete_webhook
 
 app = FastAPI(
     title="Mini Compute Console",
@@ -34,6 +36,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_request_id(request, call_next):
+    """Stamp every response with a unique X-Request-ID for tracing."""
+    rid = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:8]
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid
+    return response
+
 
 _BRANDS_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "brands")
 
@@ -363,6 +375,62 @@ async def ws_events(websocket: WebSocket):
 @app.get("/health", include_in_schema=False)
 def health():
     return {"status": "ok"}
+
+
+# ── Webhooks ──────────────────────────────────────────────────────────────────
+
+@app.post("/webhooks", status_code=201, summary="Register a webhook")
+def create_webhook(
+    body: dict,
+    user: str = Depends(verify_api_key),
+):
+    """
+    Register a URL to receive HTTP POST callbacks on job events.
+
+    ```json
+    {
+      "url": "https://example.com/hooks/compute",
+      "events": ["job_complete", "job_cancelled"],
+      "secret": "optional-signing-secret"
+    }
+    ```
+
+    Valid events: `job_launched`, `job_running`, `job_complete`, `job_cancelled`.
+
+    The callback receives a JSON body with `{"type": "<event>", "job_id": "...", ...}`.
+    If a `secret` is provided it is forwarded as `X-Hook-Secret` on every delivery.
+    """
+    url    = body.get("url", "").strip()
+    events = body.get("events", [])
+    secret = body.get("secret")
+
+    if not url:
+        raise HTTPException(status_code=422, detail="'url' is required")
+    if not events:
+        raise HTTPException(status_code=422, detail="'events' list is required")
+    try:
+        return register_webhook(user, url, events, secret)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.get("/webhooks", summary="List registered webhooks")
+def list_my_webhooks(user: str = Depends(verify_api_key)):
+    return list_webhooks(user)
+
+
+@app.get("/webhooks/{webhook_id}", summary="Get a webhook")
+def get_my_webhook(webhook_id: str, user: str = Depends(verify_api_key)):
+    w = get_webhook(webhook_id, user)
+    if not w:
+        raise HTTPException(status_code=404, detail="Not found")
+    return w
+
+
+@app.delete("/webhooks/{webhook_id}", status_code=204, summary="Delete a webhook")
+def delete_my_webhook(webhook_id: str, user: str = Depends(verify_api_key)):
+    if not delete_webhook(webhook_id, user):
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

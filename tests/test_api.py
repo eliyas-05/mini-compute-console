@@ -361,3 +361,83 @@ def test_system_info(client):
 
 def test_health(client):
     assert client.get("/health").json() == {"status": "ok"}
+
+
+# ── Webhooks ──────────────────────────────────────────────────────────────────
+
+def test_register_webhook(client):
+    res = client.post("/webhooks", json={
+        "url": "https://example.com/hook",
+        "events": ["job_complete", "job_cancelled"],
+    }, headers=HEADERS)
+    assert res.status_code == 201
+    data = res.json()
+    assert "id" in data
+    assert data["url"] == "https://example.com/hook"
+    assert "job_complete" in data["events"]
+    assert "secret" not in data  # never returned
+
+
+def test_register_webhook_invalid_event(client):
+    res = client.post("/webhooks", json={
+        "url": "https://example.com/hook",
+        "events": ["job_teleported"],
+    }, headers=HEADERS)
+    assert res.status_code == 422
+
+
+def test_register_webhook_missing_url(client):
+    res = client.post("/webhooks", json={"events": ["job_complete"]}, headers=HEADERS)
+    assert res.status_code == 422
+
+
+def test_list_webhooks(client):
+    client.post("/webhooks", json={"url": "https://a.com", "events": ["job_complete"]}, headers=HEADERS)
+    client.post("/webhooks", json={"url": "https://b.com", "events": ["job_cancelled"]}, headers=HEADERS)
+    res = client.get("/webhooks", headers=HEADERS)
+    assert res.status_code == 200
+    assert len(res.json()) == 2
+
+
+def test_list_webhooks_scoped_to_owner(client):
+    client.post("/webhooks", json={"url": "https://demo.com", "events": ["job_complete"]}, headers=HEADERS)
+    client.post("/webhooks", json={"url": "https://tenant.com", "events": ["job_complete"]}, headers=TENANT_HEADERS)
+    demo_hooks   = client.get("/webhooks", headers=HEADERS).json()
+    tenant_hooks = client.get("/webhooks", headers=TENANT_HEADERS).json()
+    assert all(h["url"] == "https://demo.com" for h in demo_hooks)
+    assert all(h["url"] == "https://tenant.com" for h in tenant_hooks)
+
+
+def test_get_webhook(client):
+    wid = client.post("/webhooks", json={"url": "https://x.com", "events": ["job_complete"]}, headers=HEADERS).json()["id"]
+    res = client.get(f"/webhooks/{wid}", headers=HEADERS)
+    assert res.status_code == 200
+    assert res.json()["id"] == wid
+
+
+def test_get_webhook_cross_tenant_returns_404(client):
+    wid = client.post("/webhooks", json={"url": "https://x.com", "events": ["job_complete"]}, headers=HEADERS).json()["id"]
+    assert client.get(f"/webhooks/{wid}", headers=TENANT_HEADERS).status_code == 404
+
+
+def test_delete_webhook(client):
+    wid = client.post("/webhooks", json={"url": "https://x.com", "events": ["job_complete"]}, headers=HEADERS).json()["id"]
+    assert client.delete(f"/webhooks/{wid}", headers=HEADERS).status_code == 204
+    assert client.get(f"/webhooks/{wid}", headers=HEADERS).status_code == 404
+
+
+def test_delete_webhook_cross_tenant_returns_404(client):
+    wid = client.post("/webhooks", json={"url": "https://x.com", "events": ["job_complete"]}, headers=HEADERS).json()["id"]
+    assert client.delete(f"/webhooks/{wid}", headers=TENANT_HEADERS).status_code == 404
+
+
+# ── X-Request-ID header ───────────────────────────────────────────────────────
+
+def test_response_has_request_id(client):
+    res = client.get("/health")
+    assert "x-request-id" in res.headers
+
+
+def test_client_request_id_echoed(client):
+    res = client.get("/health", headers={"X-Request-ID": "my-trace-123"})
+    assert res.headers["x-request-id"] == "my-trace-123"

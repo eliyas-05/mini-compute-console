@@ -147,6 +147,7 @@ backend/
   templates.py     Job template CRUD
   analytics.py     Aggregate spend + usage stats
   audit_log.py     Immutable action log
+  webhooks.py      Webhook registry + async HTTP delivery
   logger.py        Structured JSON logging to stdout
   mock_data.py     8 GPU providers (RunPod, Vast.ai, Colo)
 
@@ -158,7 +159,7 @@ frontend/
 
 tests/
   conftest.py      TestClient fixtures, 4 API key constants
-  test_api.py      62 integration tests
+  test_api.py      64 integration tests
   test_job_engine.py  Unit tests for state machine
 ```
 
@@ -174,6 +175,7 @@ tests/
 | Auth + security | API key auth, sliding-window rate limiting, tenant isolation |
 | Simulation | Ornstein-Uhlenbeck process for realistic market prices |
 | Observability | Structured JSON logs, Prometheus metrics, SLA tracking |
-| Testing | 62 tests, autouse fixtures, cross-tenant isolation assertions |
+| Event-driven integrations | Webhook registry with async delivery, delivery attempt log, secret signing |
+| Testing | 75 tests, autouse fixtures, cross-tenant isolation assertions |
 | Frontend | Vanilla JS, WebSocket client, live filtering, keyboard shortcuts |
 | DevOps | Docker, docker-compose, GitHub Actions CI |

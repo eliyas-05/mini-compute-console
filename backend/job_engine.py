@@ -10,6 +10,7 @@ from logger import info, warn
 from mock_data import PROVIDERS
 from pubsub import broadcast_sync
 from spot_prices import get_spot_price, get_spot_prices
+from webhooks import fire_webhooks
 
 _jobs: dict[str, dict] = {}
 
@@ -167,6 +168,10 @@ def get_job(job_id: str) -> Optional[dict]:
         job["status"] = "complete"
         broadcast_sync({"type": "job_complete", "job_id": job_id,
                         "cost": job["cost_so_far"], "owner": job.get("owner")})
+        fire_webhooks("job_complete", job.get("owner", ""), {
+            "job_id": job_id, "provider": job["provider_id"],
+            "cost": job["cost_so_far"], "gpu_type": job["gpu_type"],
+        })
 
     job["cost_so_far"] = round(elapsed / 3600 * job["price_per_hour"], 6)
 
@@ -222,6 +227,10 @@ def get_job(job_id: str) -> Optional[dict]:
         upsert_job(job)
         broadcast_sync({"type": "job_cancelled", "job_id": job_id,
                         "reason": "budget", "owner": job.get("owner")})
+        fire_webhooks("job_cancelled", job.get("owner", ""), {
+            "job_id": job_id, "reason": "budget",
+            "cost": job["cost_so_far"], "budget_limit": job["budget_limit"],
+        })
 
     if job["status"] == "complete" and not any("complete" in l for l in job["_logs"]):
         ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
