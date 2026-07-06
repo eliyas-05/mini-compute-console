@@ -6,6 +6,8 @@ A scaled-down GPU compute marketplace with real-time job streaming, multi-tenant
 
 ---
 
+> **See it in action:** follow [DEMO.md](DEMO.md) for a 3-minute walkthrough of every feature — live WebSocket streaming, cost forecasting, efficiency report, and multi-tenant isolation.
+
 ## What it does
 
 VoltGrid lets you pick a GPU provider, launch a training job, and watch costs tick up and logs stream in real time — the same core loop as RunPod or Vast.ai, compressed into a clean, self-contained demo.
