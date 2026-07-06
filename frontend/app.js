@@ -1,5 +1,7 @@
-const API_BASE = "http://localhost:8000";
-const WS_BASE  = "ws://localhost:8000";
+// Allow overriding via ?api=https://your-backend.railway.app in the URL
+const _apiParam = new URLSearchParams(window.location.search).get("api");
+const API_BASE  = _apiParam || (window.location.hostname === "localhost" ? "http://localhost:8000" : `${window.location.protocol}//${window.location.hostname}:8000`);
+const WS_BASE   = API_BASE.replace(/^http/, "ws");
 const JOB_DURATION_SECONDS = 90;
 
 let currentJobId = null;
