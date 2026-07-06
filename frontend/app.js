@@ -187,11 +187,21 @@ function openWebSocket(jobId) {
 
     if (msg.status) {
       apiFetch(`/jobs/${jobId}`, { silent: true }).then(async job => {
-        // Keep logs visible after completion by fetching them
         let logs = null;
         if (job.status === "complete" || job.status === "cancelled") {
+          // Fetch final logs to display after completion
           const l = await apiFetch(`/jobs/${jobId}/logs`, { silent: true }).catch(() => null);
           logs = l ? l.logs : [];
+        } else {
+          // Preserve live log lines accumulated during the WS stream
+          const existingBox = document.getElementById("log-box");
+          const savedHtml = existingBox ? existingBox.innerHTML : "";
+          renderJobCard(job, null);
+          const newBox = document.getElementById("log-box");
+          if (newBox && savedHtml) newBox.innerHTML = savedHtml;
+          refreshHistory();
+          refreshAnalytics();
+          return;
         }
         renderJobCard(job, logs);
         refreshHistory();
