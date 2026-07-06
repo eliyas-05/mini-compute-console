@@ -43,10 +43,14 @@ _LOG_TEMPLATES = [
 ]
 
 
+_log_counter = 0
+
 def _make_log_line(elapsed: float) -> str:
+    global _log_counter
+    _log_counter += 1
     progress = min(elapsed / _JOB_DURATION_SECONDS, 1.0)
     step = int(progress * 500)
-    template = _LOG_TEMPLATES[int(elapsed * 7) % len(_LOG_TEMPLATES)]
+    template = _LOG_TEMPLATES[_log_counter % len(_LOG_TEMPLATES)]
     ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
     line = template.format(
         step=step,
