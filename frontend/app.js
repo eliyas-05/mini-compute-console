@@ -36,15 +36,17 @@ async function loadBrand(brandName) {
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
+// silent:true suppresses error toasts — use for background polling, not user actions
 async function apiFetch(path, options = {}) {
+  const { silent, ...fetchOptions } = options;
   const key = document.getElementById("api-key-input").value.trim() || apiKey;
   const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: { "X-API-Key": key, "Content-Type": "application/json", ...(options.headers || {}) },
+    ...fetchOptions,
+    headers: { "X-API-Key": key, "Content-Type": "application/json", ...(fetchOptions.headers || {}) },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || res.statusText);
+    throw Object.assign(new Error(err.detail || res.statusText), { status: res.status, silent });
   }
   return res.json();
 }
@@ -54,19 +56,20 @@ async function apiFetch(path, options = {}) {
 let _spotCache   = {};
 let _healthCache = {};
 
-async function loadProviders() {
+async function loadProviders(silent = false) {
   try {
+    const opts = silent ? { silent: true } : {};
     const [providers, spots, health, slas] = await Promise.all([
-      apiFetch("/providers"),
-      apiFetch("/spot-prices"),
-      apiFetch("/providers/health"),
-      apiFetch("/providers/sla"),
+      apiFetch("/providers", opts),
+      apiFetch("/spot-prices", opts),
+      apiFetch("/providers/health", opts),
+      apiFetch("/providers/sla", opts),
     ]);
     _spotCache   = Object.fromEntries(spots.map(s => [s.provider_id, s]));
     _healthCache = health;
     _slaCache    = slas;
     renderProviders(providers);
-  } catch (e) { showToast(`Failed to load providers: ${e.message}`, "error"); }
+  } catch (e) { if (!e.silent) showToast(`Failed to load providers: ${e.message}`, "error"); }
 }
 
 function renderProviders(providers) {
@@ -183,8 +186,14 @@ function openWebSocket(jobId) {
     }
 
     if (msg.status) {
-      apiFetch(`/jobs/${jobId}`).then(job => {
-        renderJobCard(job, null);
+      apiFetch(`/jobs/${jobId}`, { silent: true }).then(async job => {
+        // Keep logs visible after completion by fetching them
+        let logs = null;
+        if (job.status === "complete" || job.status === "cancelled") {
+          const l = await apiFetch(`/jobs/${jobId}/logs`, { silent: true }).catch(() => null);
+          logs = l ? l.logs : [];
+        }
+        renderJobCard(job, logs);
         refreshHistory();
         refreshAnalytics();
         document.getElementById("forecast-card").style.display = "none";
@@ -481,7 +490,7 @@ let _allJobs = [];
 
 async function refreshHistory() {
   try {
-    _allJobs = await apiFetch("/jobs");
+    _allJobs = await apiFetch("/jobs", { silent: true });
     applyHistoryFilter();
   } catch { /* silent */ }
 }
@@ -533,9 +542,12 @@ function renderHistory(jobs) {
 
 async function selectJobFromHistory(jobId) {
   try {
-    const job = await apiFetch(`/jobs/${jobId}`);
+    const [job, logData] = await Promise.all([
+      apiFetch(`/jobs/${jobId}`),
+      apiFetch(`/jobs/${jobId}/logs`).catch(() => ({ logs: [] })),
+    ]);
     currentJobId = jobId;
-    renderJobCard(job, null);
+    renderJobCard(job, logData.logs);
     applyHistoryFilter();
     if (job.status === "running") {
       openWebSocket(jobId);
@@ -544,9 +556,6 @@ async function selectJobFromHistory(jobId) {
       document.getElementById("forecast-card").style.display = "none";
     }
     if (job.status === "complete") loadJobReport(jobId);
-    const logs = await apiFetch(`/jobs/${jobId}/logs`);
-    const box  = document.getElementById("log-box");
-    if (box) box.innerHTML = logs.logs.map(l => `<div class="log-line">${escapeHtml(l)}</div>`).join("") || '<span class="log-empty">No logs.</span>';
   } catch (e) { showToast(`Could not load job: ${e.message}`, "error"); }
 }
 
@@ -554,7 +563,7 @@ async function selectJobFromHistory(jobId) {
 
 async function refreshAnalytics() {
   try {
-    const a = await apiFetch("/analytics");
+    const a = await apiFetch("/analytics", { silent: true });
     document.getElementById("m-total-jobs").textContent   = a.total_jobs;
     document.getElementById("m-running").textContent      = a.running_jobs;
     document.getElementById("m-completed").textContent    = a.completed_jobs;
@@ -837,6 +846,9 @@ document.addEventListener("DOMContentLoaded", () => {
   refreshRateLimit();
   loadTemplates();
 
-  setInterval(() => { loadProviders(); refreshAnalytics(); refreshHistory(); }, 15000);
-  setInterval(refreshRateLimit, 5000);
+  // Stagger background polls so they never burst-fire together
+  setInterval(() => loadProviders(true),    20000);
+  setInterval(() => refreshAnalytics(),     23000);
+  setInterval(() => refreshHistory(),       17000);
+  setInterval(refreshRateLimit, 8000);
 });

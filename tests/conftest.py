@@ -4,6 +4,12 @@ import os
 # Make backend importable from the tests directory
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
+# Point the database at a throwaway temp file so tests never touch console.db
+import tempfile
+_test_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+_test_db.close()
+os.environ["DB_PATH"] = _test_db.name
+
 import pytest
 from fastapi.testclient import TestClient
 from main import app
@@ -19,11 +25,13 @@ TENANT_HEADERS = {"X-API-Key": TENANT_KEY}
 
 
 @pytest.fixture(autouse=True)
-def reset_jobs():
-    import job_engine
+def reset_state():
+    import job_engine, audit_log
     job_engine._jobs.clear()
+    audit_log._audit_entries.clear()
     yield
     job_engine._jobs.clear()
+    audit_log._audit_entries.clear()
 
 
 @pytest.fixture
