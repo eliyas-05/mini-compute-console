@@ -26,15 +26,17 @@ TENANT_HEADERS = {"X-API-Key": TENANT_KEY}
 
 @pytest.fixture(autouse=True)
 def reset_state():
-    import job_engine, audit_log, webhooks, auth
+    import job_engine, audit_log, webhooks, auth, alerts
     job_engine._jobs.clear()
     audit_log._audit_entries.clear()
     webhooks._webhooks.clear()
+    alerts._alerts.clear()
     auth._rate_counters.clear()
     yield
     job_engine._jobs.clear()
     audit_log._audit_entries.clear()
     webhooks._webhooks.clear()
+    alerts._alerts.clear()
     auth._rate_counters.clear()
 
 

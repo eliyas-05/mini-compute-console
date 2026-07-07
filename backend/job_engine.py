@@ -11,6 +11,7 @@ from mock_data import PROVIDERS
 from pubsub import broadcast_sync
 from spot_prices import get_spot_price, get_spot_prices
 from webhooks import fire_webhooks
+from alerts import check_alerts
 
 _jobs: dict[str, dict] = {}
 
@@ -102,16 +103,30 @@ def launch_job(
     owner: str = "demo-user",
     scheduled_at: Optional[float] = None,
     tags: Optional[dict] = None,
+    depends_on: Optional[str] = None,
 ) -> dict:
     if priority not in _PRIORITY_RANK:
         raise ValueError(f"Invalid priority '{priority}'. Must be high, normal, or low.")
 
+    # Validate dependency if provided
+    if depends_on:
+        dep = _jobs.get(depends_on)
+        if not dep:
+            raise ValueError(f"Dependency job '{depends_on}' not found")
+        if dep.get("owner") != owner:
+            raise ValueError(f"Dependency job '{depends_on}' not found")  # 404-style, not 403
+
+    # Dependency pending — job waits in "waiting" until the dependency completes
+    if depends_on and _jobs.get(depends_on, {}).get("status") not in ("complete",):
+        provider = None
+        initial_status = "waiting"
     # For scheduled jobs we defer provider selection until start time
-    if scheduled_at and scheduled_at > time.time():
+    elif scheduled_at and scheduled_at > time.time():
         provider = None
         initial_status = "scheduled"
     else:
         scheduled_at = None
+        depends_on = None  # already complete, skip waiting
         if provider_id:
             provider = _get_provider(provider_id)
             if not provider:
@@ -144,6 +159,7 @@ def launch_job(
         "budget_limit": budget_limit,
         "template_id": template_id,
         "tags": tags or {},
+        "depends_on": depends_on,
         "owner": owner,
         "created_at": now,
         "gpu_util": 0,
@@ -176,6 +192,29 @@ def get_job(job_id: str) -> Optional[dict]:
         if job["status"] == "cancelled":
             job["cost_so_far"] = round(elapsed / 3600 * job["price_per_hour"], 6)
         return job
+
+    # Waiting → queued when dependency completes
+    if job["status"] == "waiting":
+        dep_id = job.get("depends_on")
+        dep = _jobs.get(dep_id) if dep_id else None
+        if not dep or dep.get("status") == "complete":
+            provider = _auto_pick_provider(job.get("priority", "normal"))
+            if provider:
+                spot = get_spot_price(provider["id"])
+                job["provider_id"]         = provider["id"]
+                job["provider_name"]       = provider["name"]
+                job["gpu_type"]            = provider["gpu_type"]
+                job["region"]              = provider["region"]
+                job["price_per_hour"]      = spot
+                job["base_price_per_hour"] = provider["price_per_hour"]
+                job["launch_price_per_hour"] = spot
+                job["started_at"]          = now
+            job["status"] = "queued"
+            ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+            dep_label = f"dependency {dep_id}" if dep_id else "no dependency"
+            job["_logs"].append(f"[{ts}] {dep_label} completed — entering queue on {job.get('provider_name','auto')}.")
+            broadcast_sync({"type": "job_queued", "job_id": job_id,
+                            "depends_on": dep_id, "owner": job.get("owner")})
 
     # Scheduled → queued when the window opens
     if job["status"] == "scheduled" and now >= (job.get("scheduled_at") or 0):
@@ -299,6 +338,25 @@ def get_job(job_id: str) -> Optional[dict]:
         job["_logs"].append(line)
         append_log(job["id"], line)
         upsert_job(job)
+
+        # Check spend alerts for this owner
+        owner = job.get("owner", "")
+        if owner:
+            total_spend = sum(
+                j.get("cost_so_far", 0.0) for j in _jobs.values()
+                if j.get("owner") == owner
+            )
+
+            def _alert_fire(alert, spend):
+                fire_webhooks("spend_alert", owner, {
+                    "alert_id": alert["id"],
+                    "label": alert["label"],
+                    "threshold_usd": alert["threshold_usd"],
+                    "total_spend": round(spend, 6),
+                    "webhook_id": alert.get("webhook_id"),
+                })
+
+            check_alerts(owner, total_spend, _alert_fire)
 
     # Add budget metadata to job for API consumers
     job["budget_remaining"] = budget_remaining(job)

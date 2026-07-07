@@ -40,6 +40,10 @@ class LaunchRequest(BaseModel):
         default=None,
         description="Arbitrary key-value metadata attached to the job.",
     )
+    depends_on: Optional[str] = Field(
+        default=None,
+        description="Job ID that must complete before this job starts. Creates a 'waiting' status until the dependency finishes.",
+    )
 
 
 class BulkLaunchRequest(BaseModel):
@@ -85,7 +89,7 @@ class JobResponse(BaseModel):
     price_per_hour: float
     base_price_per_hour: float
     priority: Literal["high", "normal", "low"]
-    status: Literal["queued", "running", "complete", "cancelled", "scheduled"]
+    status: Literal["queued", "running", "complete", "cancelled", "scheduled", "waiting"]
     started_at: float
     cost_so_far: float
     projected_cost: Optional[float]
@@ -99,6 +103,7 @@ class JobResponse(BaseModel):
     preemption_spike_pct: Optional[float] = None
     scheduled_at: Optional[float] = None
     tags: dict = {}
+    depends_on: Optional[str] = None
     owner: str = "demo-user"
 
 

@@ -596,3 +596,148 @@ def test_admin_bulk_cancel_non_admin_returns_403(client):
 def test_admin_bulk_cancel_invalid_status(client):
     res = client.delete("/admin/jobs/bulk?status=complete", headers=ADMIN_HEADERS)
     assert res.status_code == 400
+
+
+# ── Job dependencies ──────────────────────────────────────────────────────────
+
+def test_job_with_dependency_starts_waiting(client):
+    parent = client.post("/jobs", json={}, headers=HEADERS).json()
+    child  = client.post("/jobs", json={"depends_on": parent["job_id"]}, headers=HEADERS).json()
+    assert child["status"] == "waiting"
+    assert child["depends_on"] == parent["job_id"]
+
+
+def test_job_dependency_cross_tenant_rejected(client):
+    parent = client.post("/jobs", json={}, headers=TENANT_HEADERS).json()
+    res    = client.post("/jobs", json={"depends_on": parent["job_id"]}, headers=HEADERS)
+    assert res.status_code == 400  # can't depend on another tenant's job
+
+
+def test_job_dependency_nonexistent_rejected(client):
+    res = client.post("/jobs", json={"depends_on": "notreal1"}, headers=HEADERS)
+    assert res.status_code == 400
+
+
+def test_waiting_job_released_when_parent_completes(client):
+    import job_engine
+    parent = client.post("/jobs", json={}, headers=HEADERS).json()
+    child  = client.post("/jobs", json={"depends_on": parent["job_id"]}, headers=HEADERS).json()
+    assert child["status"] == "waiting"
+    # Mark parent complete
+    job_engine._jobs[parent["job_id"]]["status"] = "complete"
+    # Poll child — should transition to queued
+    updated = client.get(f"/jobs/{child['job_id']}", headers=HEADERS).json()
+    assert updated["status"] == "queued"
+
+
+# ── Spend alerts ──────────────────────────────────────────────────────────────
+
+def test_create_alert(client):
+    res = client.post("/alerts", json={"threshold_usd": 1.0, "label": "Test cap"}, headers=HEADERS)
+    assert res.status_code == 201
+    data = res.json()
+    assert data["threshold_usd"] == 1.0
+    assert data["fired"] is False
+
+
+def test_create_alert_requires_threshold(client):
+    res = client.post("/alerts", json={"label": "no threshold"}, headers=HEADERS)
+    assert res.status_code == 422
+
+
+def test_create_alert_threshold_must_be_positive(client):
+    res = client.post("/alerts", json={"threshold_usd": -1.0}, headers=HEADERS)
+    assert res.status_code == 422
+
+
+def test_list_alerts(client):
+    client.post("/alerts", json={"threshold_usd": 1.0}, headers=HEADERS)
+    client.post("/alerts", json={"threshold_usd": 2.0}, headers=HEADERS)
+    res = client.get("/alerts", headers=HEADERS)
+    assert res.status_code == 200
+    assert len(res.json()) == 2
+
+
+def test_alerts_scoped_to_owner(client):
+    client.post("/alerts", json={"threshold_usd": 1.0}, headers=HEADERS)
+    client.post("/alerts", json={"threshold_usd": 1.0}, headers=TENANT_HEADERS)
+    demo_alerts   = client.get("/alerts", headers=HEADERS).json()
+    tenant_alerts = client.get("/alerts", headers=TENANT_HEADERS).json()
+    assert len(demo_alerts) == 1
+    assert len(tenant_alerts) == 1
+
+
+def test_delete_alert(client):
+    aid = client.post("/alerts", json={"threshold_usd": 1.0}, headers=HEADERS).json()["id"]
+    assert client.delete(f"/alerts/{aid}", headers=HEADERS).status_code == 204
+    assert client.get(f"/alerts/{aid}", headers=HEADERS).status_code == 404
+
+
+def test_reset_alert(client):
+    import alerts as _alerts_module
+    aid = client.post("/alerts", json={"threshold_usd": 0.0001}, headers=HEADERS).json()["id"]
+    _alerts_module._alerts[aid]["fired"] = True
+    res = client.patch(f"/alerts/{aid}/reset", headers=HEADERS)
+    assert res.status_code == 200
+    assert res.json()["fired"] is False
+
+
+def test_alert_cross_tenant_returns_404(client):
+    aid = client.post("/alerts", json={"threshold_usd": 1.0}, headers=HEADERS).json()["id"]
+    assert client.get(f"/alerts/{aid}", headers=TENANT_HEADERS).status_code == 404
+
+
+# ── Timeseries analytics ──────────────────────────────────────────────────────
+
+def test_timeseries_returns_structure(client):
+    client.post("/jobs", json={}, headers=HEADERS)
+    res = client.get("/analytics/timeseries", headers=HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert "granularity" in data
+    assert "buckets" in data
+    assert "total_spend" in data
+
+
+def test_timeseries_hourly_granularity(client):
+    client.post("/jobs", json={}, headers=HEADERS)
+    res = client.get("/analytics/timeseries?granularity=hour", headers=HEADERS).json()
+    assert res["granularity"] == "hour"
+    if res["buckets"]:
+        assert "T" in res["buckets"][0]["bucket"]  # ISO hour format
+
+
+def test_timeseries_daily_granularity(client):
+    client.post("/jobs", json={}, headers=HEADERS)
+    res = client.get("/analytics/timeseries?granularity=day", headers=HEADERS).json()
+    assert res["granularity"] == "day"
+
+
+def test_timeseries_invalid_granularity(client):
+    res = client.get("/analytics/timeseries?granularity=minute", headers=HEADERS)
+    assert res.status_code == 422
+
+
+def test_timeseries_job_count_matches_launched(client):
+    client.post("/jobs", json={}, headers=HEADERS)
+    client.post("/jobs", json={}, headers=HEADERS)
+    res = client.get("/analytics/timeseries", headers=HEADERS).json()
+    assert res["total_jobs"] == 2
+
+
+# ── Job timeline ──────────────────────────────────────────────────────────────
+
+def test_job_timeline(client):
+    job = client.post("/jobs", json={}, headers=HEADERS).json()
+    res = client.get(f"/jobs/{job['job_id']}/timeline", headers=HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["job_id"] == job["job_id"]
+    assert "current_status" in data
+    assert "events" in data
+    assert isinstance(data["events"], list)
+
+
+def test_job_timeline_cross_tenant_returns_404(client):
+    job = client.post("/jobs", json={}, headers=HEADERS).json()
+    assert client.get(f"/jobs/{job['job_id']}/timeline", headers=TENANT_HEADERS).status_code == 404

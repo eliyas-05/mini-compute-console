@@ -24,6 +24,8 @@ from models import LaunchRequest, BulkLaunchRequest, JobResponse, LogsResponse, 
 from spot_prices import get_spot_prices, price_trend
 from templates import create_template, get_all_templates, get_one_template, remove_template
 from webhooks import register_webhook, list_webhooks, get_webhook, delete_webhook
+from alerts import create_alert, list_alerts, get_alert, delete_alert, reset_alert
+from timeseries import compute_timeseries
 
 app = FastAPI(
     title="Mini Compute Console",
@@ -226,6 +228,7 @@ def create_job(body: LaunchRequest, user: str = Depends(verify_api_key)):
         "template_id": body.template_id,
         "scheduled_at": body.scheduled_at,
         "tags": body.tags,
+        "depends_on": body.depends_on,
         "owner": user,
     }
     if body.template_id:
@@ -316,6 +319,44 @@ def job_report_route(job_id: str, user: str = Depends(verify_api_key)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job_report(job)
+
+
+@app.get("/jobs/{job_id}/timeline", summary="Status transition history for a job")
+def job_timeline(job_id: str, user: str = Depends(verify_api_key)):
+    """
+    Returns the sequence of status transitions inferred from the job's log lines,
+    plus key timestamps (created_at, started_at, scheduled_at, depends_on).
+
+    Useful for audit trails, debugging stuck jobs, and pipeline visualization.
+    """
+    job = get_job_for_owner(job_id, user)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Extract timestamped events from log lines
+    events = []
+    for line in job.get("_logs", []):
+        # Format: [HH:MM:SS] message
+        if line.startswith("[") and "]" in line:
+            bracket_end = line.index("]")
+            ts_str = line[1:bracket_end]
+            msg = line[bracket_end + 2:]
+            events.append({"time": ts_str, "message": msg})
+
+    return {
+        "job_id": job_id,
+        "current_status": job["status"],
+        "created_at": job.get("created_at"),
+        "started_at": job.get("started_at"),
+        "scheduled_at": job.get("scheduled_at"),
+        "depends_on": job.get("depends_on"),
+        "preempted": job.get("_preempted", False),
+        "provider_id": job.get("provider_id"),
+        "rerouted_from": job.get("_rerouted_from"),
+        "retry_count": job.get("_retry_count", 0),
+        "cost_so_far": job.get("cost_so_far", 0.0),
+        "events": events,
+    }
 
 
 @app.post("/jobs/{job_id}/clone", status_code=201, response_model=JobResponse,
@@ -463,6 +504,88 @@ async def ws_job_logs(websocket: WebSocket, job_id: str):
 @app.get("/analytics", summary="Aggregate cost and usage stats")
 def analytics(user: str = Depends(verify_api_key)):
     return compute_analytics()
+
+
+@app.get("/analytics/timeseries", summary="Spend and job counts bucketed by hour or day")
+def analytics_timeseries(
+    user: str = Depends(verify_api_key),
+    granularity: str = Query(default="hour", description="'hour' or 'day'"),
+    from_ts: Optional[float] = Query(default=None, description="Window start (Unix timestamp)"),
+    to_ts: Optional[float] = Query(default=None, description="Window end (Unix timestamp)"),
+):
+    """
+    Returns per-bucket spend, job count, completed/cancelled counts, and avg GPU util.
+    Feed directly into a time-series chart (no client-side aggregation needed).
+
+    Default window: last 24 hours (hourly) or last 30 days (daily).
+    """
+    if granularity not in ("hour", "day"):
+        raise HTTPException(status_code=422, detail="granularity must be 'hour' or 'day'")
+    jobs = list_jobs(owner=user)
+    return compute_timeseries(jobs, granularity=granularity, from_ts=from_ts or 0, to_ts=to_ts or 0)
+
+
+# ── Alerts ────────────────────────────────────────────────────────────────────
+
+@app.post("/alerts", status_code=201, summary="Register a spend alert threshold")
+def create_spend_alert(body: dict, user: str = Depends(verify_api_key)):
+    """
+    Register a threshold that triggers a webhook when your total account spend
+    crosses it. Each alert fires once; reset it with PATCH /alerts/{id}/reset.
+
+    ```json
+    {
+      "threshold_usd": 5.00,
+      "label": "Daily budget cap",
+      "webhook_id": "abc12345"
+    }
+    ```
+
+    The spend_alert webhook payload:
+    ```json
+    {"type": "spend_alert", "threshold_usd": 5.0, "total_spend": 5.03, ...}
+    ```
+    """
+    threshold = body.get("threshold_usd")
+    if threshold is None:
+        raise HTTPException(status_code=422, detail="'threshold_usd' is required")
+    try:
+        alert = create_alert(
+            owner=user,
+            threshold_usd=float(threshold),
+            webhook_id=body.get("webhook_id"),
+            label=body.get("label"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return alert
+
+
+@app.get("/alerts", summary="List spend alerts for your account")
+def list_spend_alerts(user: str = Depends(verify_api_key)):
+    return list_alerts(user)
+
+
+@app.get("/alerts/{alert_id}", summary="Get a spend alert")
+def get_spend_alert(alert_id: str, user: str = Depends(verify_api_key)):
+    a = get_alert(alert_id, user)
+    if not a:
+        raise HTTPException(status_code=404, detail="Not found")
+    return a
+
+
+@app.delete("/alerts/{alert_id}", status_code=204, summary="Delete a spend alert")
+def delete_spend_alert(alert_id: str, user: str = Depends(verify_api_key)):
+    if not delete_alert(alert_id, user):
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.patch("/alerts/{alert_id}/reset", summary="Re-arm a fired alert so it can trigger again")
+def reset_spend_alert(alert_id: str, user: str = Depends(verify_api_key)):
+    a = reset_alert(alert_id, user)
+    if not a:
+        raise HTTPException(status_code=404, detail="Not found")
+    return a
 
 
 # ── Brand ─────────────────────────────────────────────────────────────────────
@@ -643,5 +766,6 @@ def _job_view(job: dict) -> dict:
         "preemption_spike_pct": job.get("preemption_spike_pct"),
         "scheduled_at": job.get("scheduled_at"),
         "tags": job.get("tags", {}),
+        "depends_on": job.get("depends_on"),
         "owner": job.get("owner", "demo-user"),
     }

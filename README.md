@@ -85,6 +85,24 @@ Pass `budget_limit` on launch. `check_budget()` is called on every poll — no b
 ### Prometheus metrics
 `GET /metrics` returns a Prometheus text/plain scrape payload (no auth, standard convention). Exposes job counts by status, total spend, avg GPU util, spot prices per provider, SLA%, and rate-limit usage per key.
 
+### Job dependency graph
+Pass `depends_on: "<job_id>"` on launch. The new job enters `waiting` status and is released into the queue the moment the parent job completes — the engine selects the cheapest provider at that instant. Chains are arbitrarily deep; cross-tenant dependencies are silently rejected (404-style) to avoid leaking job existence.
+
+```bash
+# Two-stage pipeline: preprocessing → training
+PRE=$(curl -s -X POST /jobs -d '{"tags":{"stage":"preprocess"}}' | jq -r .job_id)
+curl -X POST /jobs -d "{\"depends_on\":\"$PRE\",\"priority\":\"high\",\"tags\":{\"stage\":\"train\"}}"
+```
+
+### Spend alert thresholds
+`POST /alerts` registers an account-level threshold; when total spend crosses it the engine fires the linked webhook. Unlike per-job `budget_limit`, alerts are non-cancelling — they notify, you decide. Each alert fires once and can be re-armed with `PATCH /alerts/{id}/reset`.
+
+### Timeseries analytics
+`GET /analytics/timeseries?granularity=hour` (or `day`) returns per-bucket spend, job count, completion rate, and avg GPU utilisation. Feed directly into a chart — no client aggregation needed. Default window: last 24 hours (hourly) or 30 days (daily).
+
+### Job timeline
+`GET /jobs/{id}/timeline` returns the full status transition history with timestamps, reroute info, preemption flag, and dependency chain — the audit trail for debugging stuck pipelines.
+
 ### Spot preemption
 When a running job's spot price spikes >25% above its launch price, the engine automatically cancels the job and logs the spike percentage. The `POST /jobs/{id}/preempt` endpoint lets you trigger this manually — useful before a known price window. Each preempted job records `preempted: true` and `preemption_spike_pct` in its metadata.
 
@@ -133,7 +151,7 @@ Webhook delivery is non-blocking (asyncio background task). Each webhook records
 | `GET` | `/providers/{id}/sla` | ✅ | SLA for one provider |
 | `GET` | `/providers/recommend` | ✅ | Ranked providers for priority + budget |
 | `GET` | `/spot-prices` | ✅ | Current spot prices |
-| `POST` | `/jobs` | ✅ | Launch job (`provider_id`, `priority`, `budget_limit`, `scheduled_at`, `tags`) |
+| `POST` | `/jobs` | ✅ | Launch job (`provider_id`, `priority`, `budget_limit`, `scheduled_at`, `tags`, `depends_on`) |
 | `POST` | `/jobs/bulk` | ✅ | Launch up to 5 jobs in one request |
 | `GET` | `/jobs` | ✅ | Paginated + filtered job list (`?status=&provider_id=&priority=&tag=&from_ts=&to_ts=`) |
 | `GET` | `/jobs/{id}` | ✅ | Job status, cost, GPU util |
@@ -149,6 +167,12 @@ Webhook delivery is non-blocking (asyncio background task). Each webhook records
 | `GET` | `/templates/{id}` | ✅ | Get template |
 | `DELETE` | `/templates/{id}` | ✅ | Delete template |
 | `GET` | `/analytics` | ✅ | Aggregate spend + job counts |
+| `GET` | `/analytics/timeseries` | ✅ | Hourly/daily spend + job counts in time buckets |
+| `POST` | `/alerts` | ✅ | Register a spend threshold alert |
+| `GET` | `/alerts` | ✅ | List alerts (scoped to API key) |
+| `DELETE` | `/alerts/{id}` | ✅ | Delete alert |
+| `PATCH` | `/alerts/{id}/reset` | ✅ | Re-arm a fired alert |
+| `GET` | `/jobs/{id}/timeline` | ✅ | Status transition history + reroute/preemption audit |
 | `GET` | `/admin/audit` | ✅ admin | Immutable audit log |
 | `GET` | `/metrics` | ❌ | Prometheus scrape endpoint |
 | `GET` | `/system/info` | ✅ | Version, WS subscriber count, provider stats |
@@ -227,7 +251,7 @@ mini-compute-console/
 
 **404 not 403 on cross-tenant access** — leaking job existence to another tenant is itself a security issue. Every tenant-scoped route returns 404 if the job belongs to a different owner.
 
-**93 integration tests, isolated with `autouse` fixture** — `_jobs.clear()`, `_webhooks.clear()`, and `_rate_counters.clear()` run before and after every test, making test order irrelevant and eliminating state bleed across the full suite.
+**112 integration tests, isolated with `autouse` fixture** — `_jobs.clear()`, `_webhooks.clear()`, and `_rate_counters.clear()` run before and after every test, making test order irrelevant and eliminating state bleed across the full suite.
 
 ---
 
