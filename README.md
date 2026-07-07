@@ -85,6 +85,24 @@ Pass `budget_limit` on launch. `check_budget()` is called on every poll — no b
 ### Prometheus metrics
 `GET /metrics` returns a Prometheus text/plain scrape payload (no auth, standard convention). Exposes job counts by status, total spend, avg GPU util, spot prices per provider, SLA%, and rate-limit usage per key.
 
+### Auto-retry policy
+Pass `max_retries: N` (max 5) on launch. When spot preemption fires, the engine automatically relaunches on the cheapest available provider, decrements the retry budget, and appends a log line like `Auto-retry 1/3 — new job a1b2c3d4 queued on RunPod A100`. The retry chain is tracked via `retry_generation` and `parent_job_id` fields.
+
+### Budget extend
+`POST /jobs/{id}/extend` with `{"budget_limit": 0.25}` increases the budget cap on a running job. The new limit must exceed the current one. Returns the updated job. Solves the "my training job is 90% done but about to hit the cap" problem without cancelling and restarting.
+
+### Job comparison
+`GET /jobs/compare?ids=a1b2,c3d4,e5f6` returns side-by-side efficiency scores, GPU util, cost, and provider info for up to 10 jobs, ranked by efficiency score. Cross-tenant jobs silently excluded (404-style). Useful for A/B testing providers or comparing priority strategies.
+
+### CSV export
+`GET /jobs/export.csv` downloads the full job history as a streaming CSV with all cost, performance, and metadata fields. Ready to load into a spreadsheet, pandas, or a data pipeline.
+
+### Cost estimator
+`GET /cost/estimate?duration_seconds=3600` returns projected cost for all available providers sorted cheapest-first, with spot vs base price breakdown and savings %. Pass `provider_id=X` for a single-provider estimate. Lets you compare options before committing to a launch.
+
+### Rate limit tiers
+Admin key gets 100 req/min; standard keys get 30 req/min. Every response includes `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Window` headers matching the caller's tier. Easily extended per-key in `auth.py`.
+
 ### Job dependency graph
 Pass `depends_on: "<job_id>"` on launch. The new job enters `waiting` status and is released into the queue the moment the parent job completes — the engine selects the cheapest provider at that instant. Chains are arbitrarily deep; cross-tenant dependencies are silently rejected (404-style) to avoid leaking job existence.
 
@@ -161,6 +179,10 @@ Webhook delivery is non-blocking (asyncio background task). Each webhook records
 | `GET` | `/jobs/{id}/report` | ✅ | Efficiency score + GPU util stats |
 | `POST` | `/jobs/{id}/clone` | ✅ | Replay a job with the same config |
 | `POST` | `/jobs/{id}/preempt` | ✅ | Preempt + re-queue on cheapest provider |
+| `POST` | `/jobs/{id}/extend` | ✅ | Increase budget limit mid-run |
+| `GET` | `/jobs/export.csv` | ✅ | Download full job history as CSV |
+| `GET` | `/jobs/compare` | ✅ | Side-by-side efficiency comparison (`?ids=a,b,c`) |
+| `GET` | `/cost/estimate` | ✅ | Project cost before launching (`?duration_seconds=3600`) |
 | `DELETE` | `/admin/jobs/bulk` | ✅ admin | Bulk cancel by status filter |
 | `GET` | `/templates` | ✅ | List saved templates |
 | `POST` | `/templates` | ✅ | Save a template |
@@ -251,7 +273,7 @@ mini-compute-console/
 
 **404 not 403 on cross-tenant access** — leaking job existence to another tenant is itself a security issue. Every tenant-scoped route returns 404 if the job belongs to a different owner.
 
-**112 integration tests, isolated with `autouse` fixture** — `_jobs.clear()`, `_webhooks.clear()`, and `_rate_counters.clear()` run before and after every test, making test order irrelevant and eliminating state bleed across the full suite.
+**129 integration tests, isolated with `autouse` fixture** — `_jobs.clear()`, `_webhooks.clear()`, and `_rate_counters.clear()` run before and after every test, making test order irrelevant and eliminating state bleed across the full suite.
 
 ---
 

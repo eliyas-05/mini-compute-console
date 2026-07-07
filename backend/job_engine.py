@@ -104,6 +104,9 @@ def launch_job(
     scheduled_at: Optional[float] = None,
     tags: Optional[dict] = None,
     depends_on: Optional[str] = None,
+    max_retries: int = 0,
+    _retry_generation: int = 0,  # internal: tracks how many auto-retries have fired
+    _parent_job_id: Optional[str] = None,  # internal: chain back to original job
 ) -> dict:
     if priority not in _PRIORITY_RANK:
         raise ValueError(f"Invalid priority '{priority}'. Must be high, normal, or low.")
@@ -160,6 +163,9 @@ def launch_job(
         "template_id": template_id,
         "tags": tags or {},
         "depends_on": depends_on,
+        "max_retries": max_retries,
+        "_retry_generation": _retry_generation,
+        "_parent_job_id": _parent_job_id,
         "owner": owner,
         "created_at": now,
         "gpu_util": 0,
@@ -298,6 +304,27 @@ def get_job(job_id: str) -> Optional[dict]:
                 "job_id": job_id, "reason": "spot_preemption",
                 "spike_pct": spike_pct, "cost": job["cost_so_far"],
             })
+            # Auto-retry if the job has retries remaining
+            gen = job.get("_retry_generation", 0)
+            if gen < job.get("max_retries", 0):
+                try:
+                    replacement = launch_job(
+                        priority         = job.get("priority", "normal"),
+                        budget_limit     = job.get("budget_limit"),
+                        tags             = job.get("tags"),
+                        owner            = job.get("owner", ""),
+                        max_retries      = job.get("max_retries", 0),
+                        _retry_generation = gen + 1,
+                        _parent_job_id   = job.get("_parent_job_id") or job_id,
+                    )
+                    ts2 = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                    job["_logs"].append(
+                        f"[{ts2}] Auto-retry {gen + 1}/{job['max_retries']}"
+                        f" — new job {replacement['id']} queued on {replacement['provider_name']}."
+                    )
+                    append_log(job["id"], job["_logs"][-1])
+                except Exception:
+                    pass
             return job
 
     # GPU utilization sampling while running

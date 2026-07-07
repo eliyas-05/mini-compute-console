@@ -741,3 +741,149 @@ def test_job_timeline(client):
 def test_job_timeline_cross_tenant_returns_404(client):
     job = client.post("/jobs", json={}, headers=HEADERS).json()
     assert client.get(f"/jobs/{job['job_id']}/timeline", headers=TENANT_HEADERS).status_code == 404
+
+
+# ── Rate limit tiers ──────────────────────────────────────────────────────────
+
+def test_admin_rate_limit_higher_than_standard(client):
+    from auth import _limit_for
+    assert _limit_for("admin-key-456") > _limit_for("demo-key-123")
+
+
+def test_rate_limit_header_reflects_tier(client):
+    res = client.get("/providers", headers=HEADERS)
+    assert int(res.headers["x-ratelimit-limit"]) == 30
+    res_admin = client.get("/providers", headers=ADMIN_HEADERS)
+    assert int(res_admin.headers["x-ratelimit-limit"]) == 100
+
+
+# ── Budget extend ─────────────────────────────────────────────────────────────
+
+def test_extend_budget_increases_limit(client):
+    job = client.post("/jobs", json={"budget_limit": 0.05}, headers=HEADERS).json()
+    res = client.post(f"/jobs/{job['job_id']}/extend",
+                      json={"budget_limit": 0.20}, headers=HEADERS)
+    assert res.status_code == 200
+    assert res.json()["budget_limit"] == 0.20
+
+
+def test_extend_budget_must_increase(client):
+    job = client.post("/jobs", json={"budget_limit": 0.10}, headers=HEADERS).json()
+    res = client.post(f"/jobs/{job['job_id']}/extend",
+                      json={"budget_limit": 0.05}, headers=HEADERS)
+    assert res.status_code == 422
+
+
+def test_extend_budget_completed_job_returns_400(client):
+    import job_engine
+    job = client.post("/jobs", json={}, headers=HEADERS).json()
+    job_engine._jobs[job["job_id"]]["status"] = "complete"
+    res = client.post(f"/jobs/{job['job_id']}/extend",
+                      json={"budget_limit": 0.50}, headers=HEADERS)
+    assert res.status_code == 400
+
+
+def test_extend_budget_cross_tenant_returns_404(client):
+    job = client.post("/jobs", json={"budget_limit": 0.05}, headers=HEADERS).json()
+    res = client.post(f"/jobs/{job['job_id']}/extend",
+                      json={"budget_limit": 0.20}, headers=TENANT_HEADERS)
+    assert res.status_code == 404
+
+
+# ── CSV export ────────────────────────────────────────────────────────────────
+
+def test_csv_export_returns_csv(client):
+    client.post("/jobs", json={}, headers=HEADERS)
+    res = client.get("/jobs/export.csv", headers=HEADERS)
+    assert res.status_code == 200
+    assert "text/csv" in res.headers["content-type"]
+    lines = res.text.strip().splitlines()
+    assert lines[0].startswith("job_id")  # header row
+    assert len(lines) == 2  # header + 1 job
+
+
+def test_csv_export_scoped_to_owner(client):
+    client.post("/jobs", json={}, headers=HEADERS)
+    client.post("/jobs", json={}, headers=TENANT_HEADERS)
+    demo_csv   = client.get("/jobs/export.csv", headers=HEADERS).text
+    tenant_csv = client.get("/jobs/export.csv", headers=TENANT_HEADERS).text
+    # Each user only sees their own job
+    assert len(demo_csv.strip().splitlines()) == 2
+    assert len(tenant_csv.strip().splitlines()) == 2
+
+
+# ── Job comparison ────────────────────────────────────────────────────────────
+
+def test_compare_jobs_returns_ranked(client):
+    j1 = client.post("/jobs", json={}, headers=HEADERS).json()["job_id"]
+    j2 = client.post("/jobs", json={}, headers=HEADERS).json()["job_id"]
+    res = client.get(f"/jobs/compare?ids={j1},{j2}", headers=HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["compared"] == 2
+    assert len(data["results"]) == 2
+    assert data["results"][0]["rank"] == 1
+
+
+def test_compare_jobs_missing_ids_returns_404(client):
+    res = client.get("/jobs/compare?ids=nosuchjob1,nosuchjob2", headers=HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert all("error" in r for r in data["results"])
+
+
+def test_compare_jobs_cross_tenant_not_included(client):
+    j_demo   = client.post("/jobs", json={}, headers=HEADERS).json()["job_id"]
+    j_tenant = client.post("/jobs", json={}, headers=TENANT_HEADERS).json()["job_id"]
+    res = client.get(f"/jobs/compare?ids={j_demo},{j_tenant}", headers=HEADERS).json()
+    # demo job found, tenant job not found (404-style)
+    found  = [r for r in res["results"] if "error" not in r]
+    errors = [r for r in res["results"] if "error" in r]
+    assert len(found) == 1
+    assert len(errors) == 1
+
+
+# ── Cost estimator ────────────────────────────────────────────────────────────
+
+def test_cost_estimate_all_providers(client):
+    res = client.get("/cost/estimate?duration_seconds=90", headers=HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert "providers" in data
+    assert "cheapest" in data
+    assert len(data["providers"]) > 0
+    # Sorted by projected cost
+    costs = [p["projected_cost"] for p in data["providers"]]
+    assert costs == sorted(costs)
+
+
+def test_cost_estimate_specific_provider(client):
+    res = client.get("/cost/estimate?provider_id=runpod-a100-us-east&duration_seconds=3600", headers=HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["provider_id"] == "runpod-a100-us-east"
+    assert data["duration_seconds"] == 3600
+    assert data["projected_cost"] > 0
+
+
+def test_cost_estimate_unknown_provider_returns_404(client):
+    res = client.get("/cost/estimate?provider_id=nonexistent-gpu", headers=HEADERS)
+    assert res.status_code == 404
+
+
+# ── Auto-retry policy ─────────────────────────────────────────────────────────
+
+def test_max_retries_stored_on_job(client):
+    res = client.post("/jobs", json={"max_retries": 3}, headers=HEADERS)
+    assert res.status_code == 201
+    assert res.json()["max_retries"] == 3
+
+
+def test_max_retries_capped_at_5(client):
+    res = client.post("/jobs", json={"max_retries": 10}, headers=HEADERS)
+    assert res.status_code == 422
+
+
+def test_retry_generation_starts_at_zero(client):
+    job = client.post("/jobs", json={"max_retries": 2}, headers=HEADERS).json()
+    assert job["retry_generation"] == 0

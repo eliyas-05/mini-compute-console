@@ -44,6 +44,12 @@ class LaunchRequest(BaseModel):
         default=None,
         description="Job ID that must complete before this job starts. Creates a 'waiting' status until the dependency finishes.",
     )
+    max_retries: int = Field(
+        default=0,
+        ge=0,
+        le=5,
+        description="Max number of automatic relaunches if the job is spot-preempted. 0 = no auto-retry.",
+    )
 
 
 class BulkLaunchRequest(BaseModel):
@@ -104,6 +110,9 @@ class JobResponse(BaseModel):
     scheduled_at: Optional[float] = None
     tags: dict = {}
     depends_on: Optional[str] = None
+    max_retries: int = 0
+    retry_generation: int = 0
+    parent_job_id: Optional[str] = None
     owner: str = "demo-user"
 
 

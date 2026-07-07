@@ -19,7 +19,7 @@ from job_engine import list_jobs
 from mock_data import PROVIDERS
 from spot_prices import get_spot_prices
 from sla_tracker import get_sla
-from auth import _rate_counters, RATE_LIMIT, RATE_WINDOW
+from auth import _rate_counters, _limit_for, RATE_WINDOW
 import time
 
 

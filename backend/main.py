@@ -229,6 +229,7 @@ def create_job(body: LaunchRequest, user: str = Depends(verify_api_key)):
         "scheduled_at": body.scheduled_at,
         "tags": body.tags,
         "depends_on": body.depends_on,
+        "max_retries": body.max_retries,
         "owner": user,
     }
     if body.template_id:
@@ -248,6 +249,84 @@ def create_job(body: LaunchRequest, user: str = Depends(verify_api_key)):
            provider=job["provider_id"], budget_limit=body.budget_limit,
            scheduled_at=body.scheduled_at)
     return _job_view(job)
+
+
+@app.get("/jobs/export.csv", summary="Export all jobs as CSV")
+def export_jobs_csv(user: str = Depends(verify_api_key)):
+    """
+    Download the full job history as a CSV file. Includes all fields needed
+    for cost analysis in a spreadsheet or data pipeline.
+    """
+    import csv, io
+    from fastapi.responses import StreamingResponse
+
+    jobs = list_jobs(owner=user)
+    fields = [
+        "job_id", "provider_id", "provider_name", "gpu_type", "region",
+        "priority", "status", "price_per_hour", "base_price_per_hour",
+        "cost_so_far", "projected_cost", "budget_limit", "gpu_util",
+        "retry_count", "preempted", "preemption_spike_pct",
+        "max_retries", "retry_generation", "depends_on", "parent_job_id",
+        "scheduled_at", "started_at", "created_at", "owner",
+    ]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for j in jobs:
+        writer.writerow(_job_view(j))
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=jobs.csv"},
+    )
+
+
+@app.get("/jobs/compare", summary="Side-by-side efficiency comparison for multiple jobs")
+def compare_jobs(
+    ids: str = Query(..., description="Comma-separated job IDs (max 10)"),
+    user: str = Depends(verify_api_key),
+):
+    """
+    Compare multiple jobs side-by-side. Returns efficiency scores, GPU util,
+    cost stats, and a ranked recommendation for each job.
+
+    Useful for A/B testing providers or comparing priority strategies.
+    """
+    id_list = [i.strip() for i in ids.split(",") if i.strip()][:10]
+    if not id_list:
+        raise HTTPException(status_code=422, detail="At least one job ID required")
+
+    from report import job_report
+    results = []
+    for jid in id_list:
+        job = get_job_for_owner(jid, user)
+        if not job:
+            results.append({"job_id": jid, "error": "not found"})
+            continue
+        r = job_report(job)
+        results.append({
+            "job_id": jid,
+            "provider_id": job["provider_id"],
+            "provider_name": job["provider_name"],
+            "gpu_type": job["gpu_type"],
+            "priority": job.get("priority", "normal"),
+            "status": job["status"],
+            "cost_so_far": job["cost_so_far"],
+            "efficiency_score": r["efficiency_score"],
+            "efficiency_grade": r["efficiency_grade"],
+            "avg_gpu_util": r["gpu_util"]["avg"],
+            "spot_per_hour": r["cost"]["spot_per_hour"],
+            "savings_vs_base_pct": r["cost"]["savings_vs_base_pct"],
+            "recommendation": r["recommendation"],
+        })
+
+    results.sort(key=lambda r: r.get("efficiency_score", -1), reverse=True)
+    for i, r in enumerate(results):
+        if "error" not in r:
+            r["rank"] = i + 1
+
+    return {"compared": len(id_list), "results": results}
 
 
 @app.get("/jobs/{job_id}", response_model=JobResponse, summary="Get job status and running cost")
@@ -455,6 +534,38 @@ def job_logs(job_id: str, user: str = Depends(verify_api_key)):
     return {"job_id": job_id, "logs": logs}
 
 
+@app.post("/jobs/{job_id}/extend", summary="Increase the budget limit on a running or queued job")
+def extend_job_budget(job_id: str, body: dict, user: str = Depends(verify_api_key)):
+    """
+    Increase `budget_limit` mid-run. Useful when a training job is near its cap
+    but making good progress — extend rather than restart.
+
+    ```json
+    {"budget_limit": 0.25}
+    ```
+
+    Only works if the job is still running or queued. Returns the updated job.
+    """
+    from job_engine import _jobs
+    job = get_job_for_owner(job_id, user)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["status"] not in ("queued", "running", "waiting", "scheduled"):
+        raise HTTPException(status_code=400, detail="Cannot extend budget on a terminal job")
+    new_limit = body.get("budget_limit")
+    if new_limit is None or float(new_limit) <= 0:
+        raise HTTPException(status_code=422, detail="budget_limit must be a positive number")
+    new_limit = float(new_limit)
+    if job.get("budget_limit") and new_limit <= job["budget_limit"]:
+        raise HTTPException(status_code=422,
+                            detail=f"New limit ${new_limit:.4f} must exceed current ${job['budget_limit']:.4f}")
+    _jobs[job_id]["budget_limit"] = new_limit
+    ts = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%H:%M:%S")
+    _jobs[job_id]["_logs"].append(f"[{ts}] Budget extended to ${new_limit:.4f}.")
+    L.info("api.budget_extended", user=user, job_id=job_id, new_limit=new_limit)
+    return _job_view(get_job(job_id))
+
+
 # ── WebSocket: live log stream ─────────────────────────────────────────────────
 
 @app.websocket("/ws/jobs/{job_id}/logs")
@@ -500,6 +611,61 @@ async def ws_job_logs(websocket: WebSocket, job_id: str):
 
 
 # ── Analytics ─────────────────────────────────────────────────────────────────
+
+@app.get("/cost/estimate", summary="Estimate job cost before launching")
+def cost_estimate(
+    user: str = Depends(verify_api_key),
+    provider_id: Optional[str] = Query(default=None, description="Provider to estimate. Omit to get estimates for all available providers."),
+    priority: str = Query(default="normal", description="Routing priority (affects which provider is selected)"),
+    duration_seconds: float = Query(default=90, ge=1, le=86400, description="Expected job duration in seconds"),
+):
+    """
+    Calculate projected cost for a job before you launch it.
+    Returns spot price, base price, projected cost, and savings vs on-demand.
+
+    Use this to compare providers or validate your budget before committing.
+    """
+    from job_engine import _JOB_DURATION_SECONDS
+    from spot_prices import get_spot_prices
+
+    spots = get_spot_prices()
+
+    def _estimate(p: dict) -> dict:
+        spot = spots.get(p["id"], p["price_per_hour"])
+        base = p["price_per_hour"]
+        projected = round(duration_seconds / 3600 * spot, 6)
+        projected_base = round(duration_seconds / 3600 * base, 6)
+        return {
+            "provider_id": p["id"],
+            "name": p["name"],
+            "gpu_type": p["gpu_type"],
+            "region": p["region"],
+            "status": p["status"],
+            "spot_per_hour": round(spot, 4),
+            "base_per_hour": round(base, 4),
+            "projected_cost": projected,
+            "projected_cost_base": projected_base,
+            "savings_vs_base": round(projected_base - projected, 6),
+            "savings_pct": round((1 - spot / base) * 100, 2) if base else 0,
+            "duration_seconds": duration_seconds,
+        }
+
+    if provider_id:
+        p = next((p for p in PROVIDERS if p["id"] == provider_id), None)
+        if not p:
+            raise HTTPException(status_code=404, detail="Provider not found")
+        return _estimate(p)
+
+    # Return all available providers sorted by projected cost
+    estimates = [_estimate(p) for p in PROVIDERS if p["status"] == "available"]
+    estimates.sort(key=lambda e: e["projected_cost"])
+    return {
+        "duration_seconds": duration_seconds,
+        "priority": priority,
+        "providers": estimates,
+        "cheapest": estimates[0] if estimates else None,
+    }
+
 
 @app.get("/analytics", summary="Aggregate cost and usage stats")
 def analytics(user: str = Depends(verify_api_key)):
@@ -767,5 +933,8 @@ def _job_view(job: dict) -> dict:
         "scheduled_at": job.get("scheduled_at"),
         "tags": job.get("tags", {}),
         "depends_on": job.get("depends_on"),
+        "max_retries": job.get("max_retries", 0),
+        "retry_generation": job.get("_retry_generation", 0),
+        "parent_job_id": job.get("_parent_job_id"),
         "owner": job.get("owner", "demo-user"),
     }
