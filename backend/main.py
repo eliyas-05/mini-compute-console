@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import uuid
+from typing import Optional
 
 from fastapi import FastAPI, Depends, HTTPException, Header, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +20,7 @@ from report import job_report
 from sla_tracker import record_sample, get_sla, get_all_slas
 import logger as L
 from mock_data import PROVIDERS
-from models import LaunchRequest, JobResponse, LogsResponse, AnalyticsResponse, TemplateRequest, TemplateResponse
+from models import LaunchRequest, BulkLaunchRequest, JobResponse, LogsResponse, AnalyticsResponse, TemplateRequest, TemplateResponse
 from spot_prices import get_spot_prices, price_trend
 from templates import create_template, get_all_templates, get_one_template, remove_template
 from webhooks import register_webhook, list_webhooks, get_webhook, delete_webhook
@@ -70,6 +71,72 @@ def all_slas(user: str = Depends(verify_api_key)):
     return get_all_slas()
 
 
+@app.get("/providers/recommend", summary="Recommend providers ranked by fit for your workload")
+def recommend_providers(
+    user: str = Depends(verify_api_key),
+    priority: str = Query(default="normal", description="high=best uptime, normal=cheapest spot, low=cheapest base"),
+    budget_limit: Optional[float] = Query(default=None, description="Max USD budget — filters out providers that would exceed it"),
+    gpu_type: Optional[str] = Query(default=None, description="Filter by GPU type substring (e.g. 'H100', 'A100')"),
+):
+    """
+    Returns all available providers ranked by fit for the given priority,
+    with a plain-English rationale for each recommendation tier.
+
+    - **high** priority → sorted by uptime descending
+    - **normal** priority → sorted by current spot price ascending
+    - **low** priority → sorted by base price ascending
+
+    Each result includes the provider, its current spot price, health score,
+    and a `fit` label (`best` / `good` / `ok`).
+    """
+    spots = get_spot_prices()
+    candidates = [p for p in PROVIDERS if p["status"] == "available" and p["uptime_pct"] >= 98.0]
+
+    if gpu_type:
+        candidates = [p for p in candidates if gpu_type.upper() in p["gpu_type"].upper()]
+
+    if budget_limit:
+        from job_engine import _JOB_DURATION_SECONDS
+        max_rate = budget_limit / (_JOB_DURATION_SECONDS / 3600)
+        candidates = [p for p in candidates if spots.get(p["id"], p["price_per_hour"]) <= max_rate]
+
+    if priority == "high":
+        ranked = sorted(candidates, key=lambda p: -p["uptime_pct"])
+        sort_label = "best uptime first"
+    elif priority == "normal":
+        ranked = sorted(candidates, key=lambda p: spots.get(p["id"], p["price_per_hour"]))
+        sort_label = "cheapest spot price first"
+    else:
+        ranked = sorted(candidates, key=lambda p: p["price_per_hour"])
+        sort_label = "cheapest base price first"
+
+    def fit(i):
+        return "best" if i == 0 else "good" if i < 3 else "ok"
+
+    return {
+        "priority": priority,
+        "sort_by": sort_label,
+        "providers_evaluated": len(PROVIDERS),
+        "providers_available": len(candidates),
+        "recommendations": [
+            {
+                "rank": i + 1,
+                "fit": fit(i),
+                "provider_id": p["id"],
+                "name": p["name"],
+                "gpu_type": p["gpu_type"],
+                "region": p["region"],
+                "spot_price": round(spots.get(p["id"], p["price_per_hour"]), 4),
+                "base_price": p["price_per_hour"],
+                "uptime_pct": p["uptime_pct"],
+                "health_score": score_provider(p),
+                "trend": price_trend(p["id"]),
+            }
+            for i, p in enumerate(ranked)
+        ],
+    }
+
+
 @app.get("/providers/{provider_id}", summary="Get a single provider")
 def get_provider(provider_id: str, user: str = Depends(verify_api_key)):
     provider = next((p for p in PROVIDERS if p["id"] == provider_id), None)
@@ -112,18 +179,37 @@ def spot_prices(user: str = Depends(verify_api_key)):
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 
-@app.get("/jobs", summary="List jobs (scoped to your API key, paginated)")
+@app.get("/jobs", summary="List jobs (scoped to your API key, paginated + filtered)")
 def get_jobs(
     user: str = Depends(verify_api_key),
     response: Response = None,
     page: int = Query(default=1, ge=1, description="1-based page number"),
     limit: int = Query(default=50, ge=1, le=200, description="Items per page"),
+    status: Optional[str] = Query(default=None, description="Filter by status (queued,running,complete,cancelled,scheduled)"),
+    provider_id: Optional[str] = Query(default=None, description="Filter by provider ID"),
+    priority: Optional[str] = Query(default=None, description="Filter by priority (high,normal,low)"),
+    tag: Optional[str] = Query(default=None, description="Filter by tag key=value (e.g. env=prod)"),
+    from_ts: Optional[float] = Query(default=None, description="Unix timestamp — only jobs created after this time"),
+    to_ts: Optional[float] = Query(default=None, description="Unix timestamp — only jobs created before this time"),
 ):
-    all_jobs = [_job_view(j) for j in list_jobs(owner=user)]
-    total    = len(all_jobs)
-    start    = (page - 1) * limit
-    end      = start + limit
-    page_jobs = all_jobs[start:end]
+    jobs = list_jobs(owner=user)
+    if status:
+        jobs = [j for j in jobs if j["status"] == status]
+    if provider_id:
+        jobs = [j for j in jobs if j["provider_id"] == provider_id]
+    if priority:
+        jobs = [j for j in jobs if j.get("priority") == priority]
+    if from_ts:
+        jobs = [j for j in jobs if j["created_at"] >= from_ts]
+    if to_ts:
+        jobs = [j for j in jobs if j["created_at"] <= to_ts]
+    if tag:
+        k, _, v = tag.partition("=")
+        jobs = [j for j in jobs if j.get("tags", {}).get(k) == v]
+    all_views = [_job_view(j) for j in jobs]
+    total = len(all_views)
+    start = (page - 1) * limit
+    page_jobs = all_views[start:start + limit]
     if response is not None:
         response.headers["X-Total-Count"] = str(total)
         response.headers["X-Page"]        = str(page)
@@ -138,6 +224,8 @@ def create_job(body: LaunchRequest, user: str = Depends(verify_api_key)):
         "priority": body.priority,
         "budget_limit": body.budget_limit,
         "template_id": body.template_id,
+        "scheduled_at": body.scheduled_at,
+        "tags": body.tags,
         "owner": user,
     }
     if body.template_id:
@@ -152,9 +240,10 @@ def create_job(body: LaunchRequest, user: str = Depends(verify_api_key)):
         job = launch_job(**kwargs)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    log_action(user, job["provider_id"], job["id"], action="launch")
+    log_action(user, job["provider_id"] or "auto", job["id"], action="launch")
     L.info("api.job_launched", user=user, job_id=job["id"],
-           provider=job["provider_id"], budget_limit=body.budget_limit)
+           provider=job["provider_id"], budget_limit=body.budget_limit,
+           scheduled_at=body.scheduled_at)
     return _job_view(job)
 
 
@@ -250,6 +339,73 @@ def clone_job(job_id: str, user: str = Depends(verify_api_key)):
     return _job_view(job)
 
 
+@app.post("/jobs/{job_id}/preempt", status_code=201, response_model=JobResponse,
+          summary="Manually preempt a running job — cancel and re-queue on cheapest available provider")
+def preempt_job(job_id: str, user: str = Depends(verify_api_key)):
+    """
+    Manually trigger spot preemption: cancel the running job and immediately
+    launch a replacement on the cheapest available provider. Returns the NEW job.
+
+    The engine also auto-preempts when the spot price rises >25% above the
+    launch price — this endpoint lets you trigger it on demand (e.g. before
+    a scheduled price window).
+    """
+    src = get_job_for_owner(job_id, user)
+    if not src:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if src["status"] not in ("queued", "running"):
+        raise HTTPException(status_code=400, detail="Only queued or running jobs can be preempted")
+    cancel_job(job_id)
+    try:
+        new_job = launch_job(
+            priority     = src.get("priority", "normal"),
+            budget_limit = src.get("budget_limit"),
+            tags         = src.get("tags"),
+            owner        = user,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    log_action(user, new_job["provider_id"], new_job["id"], action="preempt")
+    L.info("api.job_preempted", user=user, source_job=job_id, new_job=new_job["id"])
+    return _job_view(new_job)
+
+
+@app.post("/jobs/bulk", status_code=201, summary="Launch up to 5 jobs in one request")
+def bulk_launch(body: BulkLaunchRequest, user: str = Depends(verify_api_key)):
+    """
+    Launch multiple jobs atomically. Each item in `jobs` is a full LaunchRequest.
+    Returns an array of results — each is either the launched job or an error object.
+    Partial success is allowed: if one job fails, others still launch.
+
+    ```json
+    {
+      "jobs": [
+        {"priority": "high"},
+        {"provider_id": "vast-h100", "priority": "low", "budget_limit": 0.05},
+        {"priority": "normal", "scheduled_at": 1720300000}
+      ]
+    }
+    ```
+    """
+    results = []
+    for req in body.jobs:
+        try:
+            job = launch_job(
+                provider_id  = req.provider_id,
+                priority     = req.priority,
+                budget_limit = req.budget_limit,
+                template_id  = req.template_id,
+                scheduled_at = req.scheduled_at,
+                tags         = req.tags,
+                owner        = user,
+            )
+            log_action(user, job["provider_id"] or "auto", job["id"], action="launch")
+            results.append({"ok": True, "job": _job_view(job)})
+        except ValueError as e:
+            results.append({"ok": False, "error": str(e)})
+    return results
+
+
 @app.get("/jobs/{job_id}/logs", response_model=LogsResponse, summary="Get job log lines")
 def job_logs(job_id: str, user: str = Depends(verify_api_key)):
     logs = get_logs(job_id, owner=user)
@@ -328,6 +484,34 @@ def audit_log(user: str = Depends(verify_api_key)):
     if user != "admin-user":
         raise HTTPException(status_code=403, detail="Admin only")
     return get_audit_log()
+
+
+@app.delete("/admin/jobs/bulk", summary="Bulk-cancel jobs by status filter (admin only)")
+def bulk_cancel_jobs(
+    user: str = Depends(verify_api_key),
+    status: str = Query(..., description="Cancel all jobs in this status (queued or running)"),
+    owner_filter: Optional[str] = Query(default=None, description="Restrict to a specific owner (admin only)"),
+):
+    """
+    Cancel all jobs matching the status filter. Useful for draining the queue
+    before maintenance or emergency cost control.
+
+    Returns: `{"cancelled": N, "skipped": M}` where skipped = already terminal.
+    """
+    if user != "admin-user":
+        raise HTTPException(status_code=403, detail="Admin only")
+    if status not in ("queued", "running"):
+        raise HTTPException(status_code=400, detail="status must be 'queued' or 'running'")
+    jobs = list_jobs(owner=owner_filter)
+    cancelled = skipped = 0
+    for j in jobs:
+        if j["status"] == status:
+            cancel_job(j["id"])
+            cancelled += 1
+        else:
+            skipped += 1
+    L.info("api.bulk_cancel", admin=user, status=status, cancelled=cancelled)
+    return {"cancelled": cancelled, "skipped": skipped}
 
 
 @app.get("/rate-limit", summary="Current rate limit status for your API key")
@@ -455,5 +639,9 @@ def _job_view(job: dict) -> dict:
         "gpu_util": job.get("gpu_util", 0),
         "rerouted_from": job.get("_rerouted_from"),
         "retry_count": job.get("_retry_count", 0),
+        "preempted": job.get("_preempted", False),
+        "preemption_spike_pct": job.get("preemption_spike_pct"),
+        "scheduled_at": job.get("scheduled_at"),
+        "tags": job.get("tags", {}),
         "owner": job.get("owner", "demo-user"),
     }

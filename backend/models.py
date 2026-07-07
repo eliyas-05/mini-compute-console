@@ -32,6 +32,23 @@ class LaunchRequest(BaseModel):
         default=None,
         description="Pre-fill settings from a saved template (overridden by explicit fields).",
     )
+    scheduled_at: Optional[float] = Field(
+        default=None,
+        description="Unix timestamp (seconds). Job stays in 'scheduled' status until this time.",
+    )
+    tags: Optional[dict] = Field(
+        default=None,
+        description="Arbitrary key-value metadata attached to the job.",
+    )
+
+
+class BulkLaunchRequest(BaseModel):
+    jobs: list[LaunchRequest] = Field(
+        ...,
+        description="List of job launch configs. Max 5.",
+        min_length=1,
+        max_length=5,
+    )
 
 
 class TemplateRequest(BaseModel):
@@ -61,14 +78,14 @@ class SpotPrice(BaseModel):
 
 class JobResponse(BaseModel):
     job_id: str
-    provider_id: str
-    provider_name: str
-    gpu_type: str
-    region: str
+    provider_id: Optional[str] = None
+    provider_name: Optional[str] = None
+    gpu_type: Optional[str] = None
+    region: Optional[str] = None
     price_per_hour: float
     base_price_per_hour: float
     priority: Literal["high", "normal", "low"]
-    status: Literal["queued", "running", "complete", "cancelled"]
+    status: Literal["queued", "running", "complete", "cancelled", "scheduled"]
     started_at: float
     cost_so_far: float
     projected_cost: Optional[float]
@@ -78,6 +95,10 @@ class JobResponse(BaseModel):
     gpu_util: int = 0
     rerouted_from: Optional[str] = None
     retry_count: int = 0
+    preempted: bool = False
+    preemption_spike_pct: Optional[float] = None
+    scheduled_at: Optional[float] = None
+    tags: dict = {}
     owner: str = "demo-user"
 
 

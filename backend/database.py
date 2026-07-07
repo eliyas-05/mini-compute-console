@@ -24,13 +24,13 @@ DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "con
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id                  TEXT PRIMARY KEY,
-    provider_id         TEXT NOT NULL,
-    provider_name       TEXT NOT NULL,
-    gpu_type            TEXT NOT NULL,
-    region              TEXT NOT NULL,
+    provider_id         TEXT,
+    provider_name       TEXT,
+    gpu_type            TEXT,
+    region              TEXT,
     priority            TEXT NOT NULL DEFAULT 'normal',
-    price_per_hour      REAL NOT NULL,
-    base_price_per_hour REAL NOT NULL,
+    price_per_hour      REAL NOT NULL DEFAULT 0.0,
+    base_price_per_hour REAL NOT NULL DEFAULT 0.0,
     status              TEXT NOT NULL DEFAULT 'queued',
     started_at          REAL NOT NULL,
     cost_so_far         REAL NOT NULL DEFAULT 0.0,
@@ -40,7 +40,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     rerouted_from       TEXT,
     template_id         TEXT,
     owner               TEXT NOT NULL DEFAULT 'demo-user',
-    created_at          REAL NOT NULL
+    created_at          REAL NOT NULL,
+    scheduled_at        REAL,
+    tags                TEXT
 );
 
 CREATE TABLE IF NOT EXISTS job_logs (
@@ -81,18 +83,19 @@ def init_db():
 
 
 def upsert_job(job: dict):
+    import json as _json
     with _conn() as con:
         con.execute("""
             INSERT INTO jobs
               (id, provider_id, provider_name, gpu_type, region, priority,
                price_per_hour, base_price_per_hour, status, started_at,
                cost_so_far, projected_cost, budget_limit, retry_count,
-               rerouted_from, template_id, owner, created_at)
+               rerouted_from, template_id, owner, created_at, scheduled_at, tags)
             VALUES
               (:id, :provider_id, :provider_name, :gpu_type, :region, :priority,
                :price_per_hour, :base_price_per_hour, :status, :started_at,
                :cost_so_far, :projected_cost, :budget_limit, :retry_count,
-               :rerouted_from, :template_id, :owner, :created_at)
+               :rerouted_from, :template_id, :owner, :created_at, :scheduled_at, :tags)
             ON CONFLICT(id) DO UPDATE SET
               status              = excluded.status,
               cost_so_far         = excluded.cost_so_far,
@@ -101,16 +104,20 @@ def upsert_job(job: dict):
               rerouted_from       = excluded.rerouted_from,
               provider_id         = excluded.provider_id,
               provider_name       = excluded.provider_name,
-              price_per_hour      = excluded.price_per_hour
+              gpu_type            = excluded.gpu_type,
+              region              = excluded.region,
+              price_per_hour      = excluded.price_per_hour,
+              scheduled_at        = excluded.scheduled_at,
+              tags                = excluded.tags
         """, {
             "id":                   job["id"],
-            "provider_id":          job["provider_id"],
-            "provider_name":        job["provider_name"],
-            "gpu_type":             job["gpu_type"],
-            "region":               job["region"],
+            "provider_id":          job.get("provider_id"),
+            "provider_name":        job.get("provider_name"),
+            "gpu_type":             job.get("gpu_type"),
+            "region":               job.get("region"),
             "priority":             job.get("priority", "normal"),
-            "price_per_hour":       job["price_per_hour"],
-            "base_price_per_hour":  job.get("base_price_per_hour", job["price_per_hour"]),
+            "price_per_hour":       job.get("price_per_hour", 0.0),
+            "base_price_per_hour":  job.get("base_price_per_hour", 0.0),
             "status":               job["status"],
             "started_at":           job["started_at"],
             "cost_so_far":          job["cost_so_far"],
@@ -121,6 +128,8 @@ def upsert_job(job: dict):
             "template_id":          job.get("template_id"),
             "owner":                job.get("owner", "demo-user"),
             "created_at":           job.get("created_at", job["started_at"]),
+            "scheduled_at":         job.get("scheduled_at"),
+            "tags":                 _json.dumps(job.get("tags") or {}),
         })
 
 
@@ -148,7 +157,10 @@ def load_all_jobs() -> list[dict]:
             job["_retry_count"] = job.pop("retry_count", 0)
             job["_rerouted_from"] = job.pop("rerouted_from", None)
             job["_gpu_samples"] = []
+            job["_preempted"] = False
             job["gpu_util"] = 0
+            raw_tags = job.get("tags")
+            job["tags"] = json.loads(raw_tags) if raw_tags else {}
             result.append(job)
         return result
 

@@ -441,3 +441,158 @@ def test_response_has_request_id(client):
 def test_client_request_id_echoed(client):
     res = client.get("/health", headers={"X-Request-ID": "my-trace-123"})
     assert res.headers["x-request-id"] == "my-trace-123"
+
+
+# ── Job scheduling ────────────────────────────────────────────────────────────
+
+def test_scheduled_job_starts_in_scheduled_status(client):
+    import time
+    future_ts = time.time() + 3600  # 1 hour from now
+    res = client.post("/jobs", json={"scheduled_at": future_ts}, headers=HEADERS)
+    assert res.status_code == 201
+    data = res.json()
+    assert data["status"] == "scheduled"
+    assert data["scheduled_at"] == future_ts
+
+
+def test_scheduled_job_past_ts_starts_queued(client):
+    import time
+    past_ts = time.time() - 1
+    res = client.post("/jobs", json={"scheduled_at": past_ts}, headers=HEADERS)
+    assert res.status_code == 201
+    assert res.json()["status"] == "queued"
+
+
+def test_job_tags_stored_and_returned(client):
+    res = client.post("/jobs", json={"tags": {"env": "prod", "team": "ml"}}, headers=HEADERS)
+    assert res.status_code == 201
+    data = res.json()
+    assert data["tags"]["env"] == "prod"
+    assert data["tags"]["team"] == "ml"
+
+
+# ── Job filtering ─────────────────────────────────────────────────────────────
+
+def test_filter_jobs_by_status(client):
+    import time
+    client.post("/jobs", json={"scheduled_at": time.time() + 3600}, headers=HEADERS)
+    client.post("/jobs", json={}, headers=HEADERS)
+    scheduled = client.get("/jobs?status=scheduled", headers=HEADERS).json()
+    queued    = client.get("/jobs?status=queued",    headers=HEADERS).json()
+    assert all(j["status"] == "scheduled" for j in scheduled)
+    assert all(j["status"] == "queued"    for j in queued)
+
+
+def test_filter_jobs_by_tag(client):
+    client.post("/jobs", json={"tags": {"env": "prod"}}, headers=HEADERS)
+    client.post("/jobs", json={"tags": {"env": "staging"}}, headers=HEADERS)
+    prod = client.get("/jobs?tag=env=prod", headers=HEADERS).json()
+    assert len(prod) == 1
+    assert prod[0]["tags"]["env"] == "prod"
+
+
+def test_filter_jobs_by_priority(client):
+    client.post("/jobs", json={"priority": "high"}, headers=HEADERS)
+    client.post("/jobs", json={"priority": "low"},  headers=HEADERS)
+    high_jobs = client.get("/jobs?priority=high", headers=HEADERS).json()
+    assert all(j["priority"] == "high" for j in high_jobs)
+
+
+# ── Bulk launch ───────────────────────────────────────────────────────────────
+
+def test_bulk_launch_returns_array(client):
+    res = client.post("/jobs/bulk", json={"jobs": [{}, {}]}, headers=HEADERS)
+    assert res.status_code == 201
+    data = res.json()
+    assert len(data) == 2
+    assert all(r["ok"] for r in data)
+
+
+def test_bulk_launch_partial_failure(client):
+    res = client.post("/jobs/bulk", json={
+        "jobs": [
+            {},
+            {"provider_id": "nonexistent-provider-xyz"},
+        ]
+    }, headers=HEADERS)
+    assert res.status_code == 201
+    data = res.json()
+    assert data[0]["ok"] is True
+    assert data[1]["ok"] is False
+    assert "error" in data[1]
+
+
+def test_bulk_launch_max_5(client):
+    res = client.post("/jobs/bulk", json={"jobs": [{}, {}, {}, {}, {}, {}]}, headers=HEADERS)
+    assert res.status_code == 422  # validation error — too many
+
+
+# ── Preemption ────────────────────────────────────────────────────────────────
+
+def test_preempt_queued_job(client):
+    original = client.post("/jobs", json={}, headers=HEADERS).json()
+    res = client.post(f"/jobs/{original['job_id']}/preempt", headers=HEADERS)
+    assert res.status_code == 201
+    new_job = res.json()
+    assert new_job["job_id"] != original["job_id"]
+    original_status = client.get(f"/jobs/{original['job_id']}", headers=HEADERS).json()["status"]
+    assert original_status == "cancelled"
+
+
+def test_preempt_completed_job_returns_400(client):
+    import time, job_engine
+    job = client.post("/jobs", json={}, headers=HEADERS).json()
+    jid = job["job_id"]
+    job_engine._jobs[jid]["status"] = "complete"
+    res = client.post(f"/jobs/{jid}/preempt", headers=HEADERS)
+    assert res.status_code == 400
+
+
+# ── Provider recommendation ───────────────────────────────────────────────────
+
+def test_recommend_returns_ranked_list(client):
+    res = client.get("/providers/recommend", headers=HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert "recommendations" in data
+    assert len(data["recommendations"]) > 0
+    assert data["recommendations"][0]["fit"] == "best"
+
+
+def test_recommend_high_priority_sorted_by_uptime(client):
+    res = client.get("/providers/recommend?priority=high", headers=HEADERS).json()
+    uptimes = [r["uptime_pct"] for r in res["recommendations"]]
+    assert uptimes == sorted(uptimes, reverse=True)
+
+
+def test_recommend_normal_priority_sorted_by_spot(client):
+    res = client.get("/providers/recommend?priority=normal", headers=HEADERS).json()
+    prices = [r["spot_price"] for r in res["recommendations"]]
+    assert prices == sorted(prices)
+
+
+def test_recommend_filters_by_budget(client):
+    res = client.get("/providers/recommend?priority=normal&budget_limit=0.0001", headers=HEADERS).json()
+    # Budget too small for any 90s job — no providers should qualify
+    assert res["providers_available"] == 0
+
+
+# ── Admin bulk cancel ─────────────────────────────────────────────────────────
+
+def test_admin_bulk_cancel_queued(client):
+    client.post("/jobs", json={}, headers=HEADERS)
+    client.post("/jobs", json={}, headers=HEADERS)
+    res = client.delete("/admin/jobs/bulk?status=queued", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["cancelled"] >= 2
+
+
+def test_admin_bulk_cancel_non_admin_returns_403(client):
+    res = client.delete("/admin/jobs/bulk?status=queued", headers=HEADERS)
+    assert res.status_code == 403
+
+
+def test_admin_bulk_cancel_invalid_status(client):
+    res = client.delete("/admin/jobs/bulk?status=complete", headers=ADMIN_HEADERS)
+    assert res.status_code == 400

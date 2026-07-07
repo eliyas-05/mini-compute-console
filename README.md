@@ -85,6 +85,22 @@ Pass `budget_limit` on launch. `check_budget()` is called on every poll — no b
 ### Prometheus metrics
 `GET /metrics` returns a Prometheus text/plain scrape payload (no auth, standard convention). Exposes job counts by status, total spend, avg GPU util, spot prices per provider, SLA%, and rate-limit usage per key.
 
+### Spot preemption
+When a running job's spot price spikes >25% above its launch price, the engine automatically cancels the job and logs the spike percentage. The `POST /jobs/{id}/preempt` endpoint lets you trigger this manually — useful before a known price window. Each preempted job records `preempted: true` and `preemption_spike_pct` in its metadata.
+
+### Job scheduling
+Pass `scheduled_at` (Unix timestamp) on launch. The job enters a `scheduled` status and waits until the time arrives, then the engine selects the cheapest available provider at that moment and enters the queue. Useful for off-peak cost optimization and deadline-driven workloads.
+
+### Bulk operations
+- `POST /jobs/bulk` — launch up to 5 jobs in one request; partial failures are reported per-job without blocking the rest
+- `DELETE /admin/jobs/bulk?status=queued` — drain the queue (admin only); returns `{"cancelled": N, "skipped": M}`
+
+### Job filtering + tags
+`GET /jobs` supports `?status=`, `?provider_id=`, `?priority=`, `?from_ts=`, `?to_ts=`, and `?tag=env=prod` filtering. Jobs accept arbitrary `tags` dict on launch — store environment, team, experiment ID, or any metadata you need for filtering.
+
+### Provider recommendation
+`GET /providers/recommend?priority=normal&budget_limit=0.50` returns ranked providers with fit labels (`best`/`good`/`ok`), health score, and plain-English sort rationale. Filters by GPU type and budget window; deduplicates provider selection logic in one place.
+
 ### Webhook notifications
 `POST /webhooks` registers a callback URL for job lifecycle events. When a job completes or is cancelled, the engine fires an authenticated HTTP POST to every matching webhook for that owner:
 ```json
@@ -115,15 +131,19 @@ Webhook delivery is non-blocking (asyncio background task). Each webhook records
 | `GET` | `/providers/health` | ✅ | Composite health score (0-100) per provider |
 | `GET` | `/providers/sla` | ✅ | 5-min rolling SLA stats for all providers |
 | `GET` | `/providers/{id}/sla` | ✅ | SLA for one provider |
+| `GET` | `/providers/recommend` | ✅ | Ranked providers for priority + budget |
 | `GET` | `/spot-prices` | ✅ | Current spot prices |
-| `POST` | `/jobs` | ✅ | Launch job. `{}` = auto-pick; or pass `provider_id`, `priority`, `budget_limit`, `template_id` |
-| `GET` | `/jobs` | ✅ | Paginated job list (scoped to API key) |
+| `POST` | `/jobs` | ✅ | Launch job (`provider_id`, `priority`, `budget_limit`, `scheduled_at`, `tags`) |
+| `POST` | `/jobs/bulk` | ✅ | Launch up to 5 jobs in one request |
+| `GET` | `/jobs` | ✅ | Paginated + filtered job list (`?status=&provider_id=&priority=&tag=&from_ts=&to_ts=`) |
 | `GET` | `/jobs/{id}` | ✅ | Job status, cost, GPU util |
 | `DELETE` | `/jobs/{id}` | ✅ | Cancel a running job |
 | `GET` | `/jobs/{id}/logs` | ✅ | Log lines |
 | `GET` | `/jobs/{id}/forecast` | ✅ | Burn rate, ETA, breach probability |
 | `GET` | `/jobs/{id}/report` | ✅ | Efficiency score + GPU util stats |
 | `POST` | `/jobs/{id}/clone` | ✅ | Replay a job with the same config |
+| `POST` | `/jobs/{id}/preempt` | ✅ | Preempt + re-queue on cheapest provider |
+| `DELETE` | `/admin/jobs/bulk` | ✅ admin | Bulk cancel by status filter |
 | `GET` | `/templates` | ✅ | List saved templates |
 | `POST` | `/templates` | ✅ | Save a template |
 | `GET` | `/templates/{id}` | ✅ | Get template |
@@ -207,7 +227,7 @@ mini-compute-console/
 
 **404 not 403 on cross-tenant access** — leaking job existence to another tenant is itself a security issue. Every tenant-scoped route returns 404 if the job belongs to a different owner.
 
-**75 integration tests, isolated with `autouse` fixture** — `_jobs.clear()`, `_webhooks.clear()`, and `_rate_counters.clear()` run before and after every test, making test order irrelevant and eliminating state bleed across the full suite.
+**93 integration tests, isolated with `autouse` fixture** — `_jobs.clear()`, `_webhooks.clear()`, and `_rate_counters.clear()` run before and after every test, making test order irrelevant and eliminating state bleed across the full suite.
 
 ---
 
