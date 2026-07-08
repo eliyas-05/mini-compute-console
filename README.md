@@ -1,10 +1,13 @@
 # Mini Compute Console
 
 [![CI](https://github.com/eliyas-05/mini-compute-console/actions/workflows/ci.yml/badge.svg)](https://github.com/eliyas-05/mini-compute-console/actions/workflows/ci.yml)
+[![Live Demo](https://img.shields.io/badge/demo-live-brightgreen)](https://web-production-388d38.up.railway.app/docs)
 
 A scaled-down GPU compute marketplace with real-time job streaming, multi-tenant API design, and production-aware backend patterns — built as a portfolio project for a software engineering internship application.
 
 ---
+
+> **Live demo:** `https://web-production-388d38.up.railway.app` — browse the interactive API docs at [/docs](https://web-production-388d38.up.railway.app/docs), or follow [DEMO.md](DEMO.md) for a full walkthrough.
 
 > **See it in action:** follow [DEMO.md](DEMO.md) for a 3-minute walkthrough of every feature — live WebSocket streaming, cost forecasting, efficiency report, and multi-tenant isolation.
 
